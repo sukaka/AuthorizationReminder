@@ -1,3 +1,7 @@
+import asyncio
+
+import httpx
+from starlette.requests import Request
 from sqlalchemy import select
 
 
@@ -132,3 +136,113 @@ def test_project_managers_can_update_and_remove_members_without_touching_owner(
         json={"role": "read_only"},
     )
     assert cannot_demote_owner.status_code == 409
+
+
+def test_project_manager_lists_only_available_member_candidates(
+    client_for_user,
+    monkeypatch,
+) -> None:
+    from app.project_routes import ProjectMemberCandidateOut
+
+    async def fake_directory(*_args, **_kwargs):
+        return [
+            ProjectMemberCandidateOut(
+                user_id="u-1",
+                username="项目负责人",
+                role="employee",
+                department_code="sales",
+            ),
+            ProjectMemberCandidateOut(
+                user_id="u-2",
+                username="现有成员",
+                role="employee",
+                department_code="delivery",
+            ),
+            ProjectMemberCandidateOut(
+                user_id="u-3",
+                username="候选成员",
+                role="employee",
+                department_code="security",
+            ),
+        ]
+
+    monkeypatch.setattr(
+        "app.project_routes._fetch_system_user_directory",
+        fake_directory,
+    )
+    owner = client_for_user("u-1")
+    regular_member = client_for_user("u-2")
+    project_uuid = _create_project(owner)["project_uuid"]
+    assert owner.post(
+        f"/api/ai/projects/{project_uuid}/members",
+        json={"user_id": "u-2", "role": "member"},
+    ).status_code == 201
+
+    response = owner.get(f"/api/ai/projects/{project_uuid}/member-candidates")
+
+    assert response.status_code == 200, response.text
+    assert response.json() == [
+        {
+            "user_id": "u-3",
+            "username": "候选成员",
+            "role": "employee",
+            "department_code": "security",
+        }
+    ]
+    assert (
+        regular_member.get(
+            f"/api/ai/projects/{project_uuid}/member-candidates"
+        ).status_code
+        == 403
+    )
+
+
+def test_system_user_directory_forwards_login_and_normalizes_response(
+    respx_mock,
+) -> None:
+    from app.config import Settings
+    from app.project_routes import _fetch_system_user_directory
+
+    route = respx_mock.get(
+        "http://auth.test:5180/api/auth/system-users",
+        params={"system": "ai-assistant"},
+    ).mock(
+        return_value=httpx.Response(
+            200,
+            json=[
+                {
+                    "id": 23,
+                    "username": "李雷",
+                    "role": "employee",
+                    "department_code": "delivery",
+                },
+                {"id": "", "username": "无效记录"},
+            ],
+        )
+    )
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"authorization", b"Bearer test-login-token")],
+        }
+    )
+    settings = Settings(
+        auth_dev_bypass=False,
+        auth_service_url="http://auth.test:5180",
+    )
+
+    candidates = asyncio.run(_fetch_system_user_directory(request, settings))
+
+    assert route.called
+    sent_request = route.calls.last.request
+    assert sent_request.headers["authorization"] == "Bearer test-login-token"
+    assert [candidate.model_dump() for candidate in candidates] == [
+        {
+            "user_id": "23",
+            "username": "李雷",
+            "role": "employee",
+            "department_code": "delivery",
+        }
+    ]

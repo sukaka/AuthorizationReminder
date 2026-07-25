@@ -56,8 +56,13 @@ def test_file_list_shows_authorized_company_and_own_files_only(client_for_user) 
     response = owner.get("/api/knowledge/files")
 
     assert response.status_code == 200
-    ids = {item["file_uuid"] for item in response.json()["items"]}
+    items = response.json()["items"]
+    ids = {item["file_uuid"] for item in items}
     assert ids == {own["file_uuid"], official["file_uuid"]}
+    assert all(item["version"] == 1 for item in items)
+    assert all(item["is_current_version"] is True for item in items)
+    assert all(len(item["content_sha256"]) == 64 for item in items)
+    assert all(item["updated_at"] for item in items)
 
 
 def test_file_detail_respects_owner_and_official_visibility(client_for_user) -> None:

@@ -75,8 +75,12 @@ export type KnowledgeFilePayload = {
   status: string;
   chunk_count: number;
   created_at: string;
+  updated_at?: string | null;
+  content_sha256?: string;
+  version?: number;
+  is_current_version?: boolean;
   source_type?: string;
-  usage_type?: 'session_attachment' | 'personal_reference' | 'official_knowledge';
+  usage_type?: 'session_attachment' | 'personal_reference' | 'official_knowledge' | 'skill_input';
   review_status?: string;
   rag_enabled?: boolean;
   reference_enabled?: boolean;
@@ -89,6 +93,28 @@ export type KnowledgeFilePayload = {
   index_status?: string;
   external_public?: boolean;
   external_download_allowed?: boolean;
+};
+
+export type KnowledgeFileVersionPayload = {
+  file_uuid: string;
+  file_name: string;
+  version: number;
+  is_current_version: boolean;
+  review_status: string;
+  status: string;
+  rag_enabled: boolean;
+  summary: string;
+  created_at: string;
+  updated_at: string;
+  parent_file_id: number | null;
+  replaced_by_file_id: number | null;
+};
+
+export type KnowledgeFileVersionTimelinePayload = {
+  file_uuid: string;
+  items: KnowledgeFileVersionPayload[];
+  effective_uuid: string | null;
+  total: number;
 };
 
 export type KnowledgeBasePayload = {
@@ -264,6 +290,14 @@ export type ChatSessionDetailPayload = ChatSessionPayload & {
   task_state?: ChatTaskStatePayload;
 };
 
+export type ChatResearchPlan = {
+  objective: string;
+  questions: string[];
+  source_scope: string;
+  citation_policy: string;
+  uncertainty_policy: string;
+};
+
 export type ChatPreparePayload = {
   session_uuid: string;
   user_message_uuid: string;
@@ -276,7 +310,7 @@ export type ChatPreparePayload = {
   generated_files?: ChatGeneratedFile[];
   loop_trace?: LoopTraceStep[];
   task_state?: ChatTaskStatePayload;
-  /** 6.0 统一任务底座 Run ID，用于跳转任务中心 */
+  /** 统一任务底座 Run ID，用于跳转任务中心。 */
   run_id?: string;
   requested_mode?: ChatModeSelection;
   effective_mode?: ChatMode;
@@ -284,6 +318,7 @@ export type ChatPreparePayload = {
   routing_confidence?: number;
   execution_mode?: 'foreground' | 'background';
   execution_reason?: string;
+  research_plan?: ChatResearchPlan | null;
 };
 
 export type ChatGeneratePayload = {
@@ -318,6 +353,7 @@ export type LongTaskPayload = {
   draft: string;
   error_code: string;
   error_message: string;
+  next_action?: string;
   retry_allowed: boolean;
   cancel_allowed: boolean;
   created_at: string;
@@ -422,16 +458,36 @@ function projectQuery(projectUuid?: string): string {
   return projectUuid ? `?project_uuid=${encodeURIComponent(projectUuid)}` : '';
 }
 
-export async function getChatSessionsByKind(kind: ChatSessionListKind, projectUuid?: string): Promise<{
+function paginatedProjectQuery(
+  projectUuid?: string,
+  options: { page?: number; pageSize?: number } = {},
+): string {
+  const params = new URLSearchParams();
+  if (projectUuid) params.set('project_uuid', projectUuid);
+  params.set('page', String(options.page ?? 1));
+  params.set('page_size', String(options.pageSize ?? 40));
+  return `?${params.toString()}`;
+}
+
+export async function getChatSessionsByKind(
+  kind: ChatSessionListKind,
+  projectUuid?: string,
+  options: { page?: number; pageSize?: number } = {},
+): Promise<{
   items: ChatSessionPayload[];
   total: number;
+  page: number;
+  page_size: number;
 }> {
   const path = kind === 'active'
     ? '/api/conversations'
     : kind === 'archived'
       ? '/api/conversations/archived'
       : '/api/conversations/trash';
-  return readJson(await apiFetch(`${path}${projectQuery(projectUuid)}`, { cache: 'no-store' }), 'CHAT_SESSIONS_FAILED');
+  return readJson(
+    await apiFetch(`${path}${paginatedProjectQuery(projectUuid, options)}`, { cache: 'no-store' }),
+    'CHAT_SESSIONS_FAILED',
+  );
 }
 
 export async function createChatSession(projectUuid?: string): Promise<ChatSessionPayload> {
@@ -552,9 +608,15 @@ export async function prepareChat(payload: {
   );
 }
 
-export async function listLongTasks(): Promise<{ items: LongTaskPayload[]; total: number }> {
+export async function listLongTasks(
+  options: { page?: number; pageSize?: number } = {},
+): Promise<{ items: LongTaskPayload[]; total: number; page: number; page_size: number }> {
+  const params = new URLSearchParams({
+    page: String(options.page ?? 1),
+    page_size: String(options.pageSize ?? 50),
+  });
   return readJson(
-    await apiFetch('/api/ai/long-tasks', { cache: 'no-store' }),
+    await apiFetch(`/api/ai/long-tasks?${params.toString()}`, { cache: 'no-store' }),
     'LONG_TASKS_FAILED',
   );
 }
@@ -872,11 +934,11 @@ export async function deleteUserModelProfile(profileUuid: string): Promise<void>
 
 export type UploadKnowledgeFileOptions = {
   knowledgeBaseId?: string;
-  usageType?: 'session_attachment' | 'personal_reference' | 'official_knowledge';
+  usageType?: 'session_attachment' | 'personal_reference' | 'official_knowledge' | 'skill_input';
   reviewStatus?: 'draft' | 'pending' | 'official';
   ragEnabled?: boolean;
   referenceEnabled?: boolean;
-  ragScope?: 'session' | 'personal' | 'company' | 'department' | 'project';
+  ragScope?: 'none' | 'session' | 'personal' | 'company' | 'department' | 'project';
   permissionScope?: 'private' | 'company' | 'department' | 'project' | 'admin';
   conversationId?: string;
   category?: string;
@@ -897,9 +959,17 @@ export async function uploadKnowledgeFile(
   form.append('review_status', reviewStatus);
   form.append('rag_enabled', String(options.ragEnabled ?? false));
   form.append('reference_enabled', String(options.referenceEnabled ?? true));
-  form.append('rag_scope', options.ragScope ?? (usageType === 'session_attachment' ? 'session' : 'personal'));
+  form.append(
+    'rag_scope',
+    options.ragScope
+      ?? (usageType === 'session_attachment' ? 'session' : usageType === 'skill_input' ? 'none' : 'personal'),
+  );
   form.append('permission_scope', options.permissionScope ?? 'private');
-  form.append('category', options.category ?? (usageType === 'session_attachment' ? '当前附件' : '个人素材'));
+  form.append(
+    'category',
+    options.category
+      ?? (usageType === 'session_attachment' ? '当前附件' : usageType === 'skill_input' ? 'Skill 输入' : '个人素材'),
+  );
   form.append('document_type', options.documentType ?? '其他');
   form.append('tags', options.tags?.join(',') ?? '');
   if (options.conversationId) form.append('conversation_id', options.conversationId);
@@ -1303,6 +1373,28 @@ export async function deleteKnowledgeFile(fileUuid: string): Promise<void> {
       method: 'DELETE',
     }),
     'KNOWLEDGE_FILE_DELETE_FAILED',
+  );
+}
+
+export async function listKnowledgeFileVersions(
+  fileUuid: string,
+): Promise<KnowledgeFileVersionTimelinePayload> {
+  return readJson(
+    await apiFetch(`/api/ai/knowledge/files/${encodeURIComponent(fileUuid)}/versions`),
+    'KNOWLEDGE_FILE_VERSION_LIST_FAILED',
+  );
+}
+
+export async function activateKnowledgeFileVersion(
+  fileUuid: string,
+): Promise<KnowledgeFileVersionTimelinePayload> {
+  return readJson(
+    await apiFetch(`/api/ai/knowledge/files/${encodeURIComponent(fileUuid)}/versions/activate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ note: '' }),
+    }),
+    'KNOWLEDGE_FILE_VERSION_ACTIVATE_FAILED',
   );
 }
 

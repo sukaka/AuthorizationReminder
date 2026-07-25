@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import juxinAiLogo from './assets/juxin-ai-logo.png';
 import {
@@ -40,28 +40,20 @@ import {
   desktopBridge,
   type DesktopBridge,
 } from './remote/desktopBridge';
+import {
+  buildWorkspaceSearch,
+  readWorkspaceLocation,
+  type NavigableWorkspacePage,
+} from './navigation/workspaceLocation';
+import {
+  BackgroundTaskNotifier,
+  type BackgroundTaskActivity,
+} from './components/BackgroundTaskNotifier';
 
 type WorkspacePage =
-  | 'assistants'
-  | 'chat'
+  | NavigableWorkspacePage
   | 'chat-prototype'
-  | 'project-workspace'
-  | 'enterprise-overview'
-  | 'enterprise-management'
-  | 'professional-tasks'
-  | 'professional-deliverables'
-  | 'history'
-  | 'tasks'
-  | 'knowledge'
-  | 'skills'
-  | 'workflows'
-  | 'agent-hub'
-  | 'learning'
-  | 'task'
-  | 'models'
-  | 'governance'
-  | 'department-stats'
-  | 'suggestions';
+  | 'task';
 
 type SidebarMode = 'expanded' | 'collapsed' | 'immersive';
 
@@ -113,20 +105,27 @@ function systemLabel(systemKey: string): string {
 
 function Workspace({ session }: { session: SessionPayload }) {
   const capabilities = getRuntimeCapabilities();
-  const [page, setPage] = useState<WorkspacePage>(() => {
-    const prototype = new URLSearchParams(window.location.search).get('prototype');
-    return prototype === 'chat' ? 'chat-prototype' : 'chat';
-  });
+  const initialLocationRef = useRef(readWorkspaceLocation(window.location.search));
+  const [page, setPage] = useState<WorkspacePage>(initialLocationRef.current.page);
   const [task, setTask] = useState<TaskDefinition | null>(null);
   const [taskError, setTaskError] = useState('');
-  const [focusRunId, setFocusRunId] = useState('');
-  const [focusArtifactId, setFocusArtifactId] = useState('');
-  const [focusWorkflowId, setFocusWorkflowId] = useState('');
-  const [focusProfessionalDeliverableId, setFocusProfessionalDeliverableId] = useState('');
-  const [historyTab, setHistoryTab] = useState<'work' | 'agent'>('work');
+  const [focusSessionUuid, setFocusSessionUuid] = useState(initialLocationRef.current.sessionUuid);
+  const [focusProjectUuid, setFocusProjectUuid] = useState(initialLocationRef.current.projectUuid);
+  const [focusRunId, setFocusRunId] = useState(initialLocationRef.current.runId);
+  const [focusArtifactId, setFocusArtifactId] = useState(initialLocationRef.current.artifactId);
+  const [focusWorkflowId, setFocusWorkflowId] = useState(initialLocationRef.current.workflowId);
+  const [focusProfessionalDeliverableId, setFocusProfessionalDeliverableId] = useState(
+    initialLocationRef.current.deliverableId,
+  );
+  const [historyTab, setHistoryTab] = useState<'work' | 'agent'>(initialLocationRef.current.historyTab);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('expanded');
   const [sidebarTouched, setSidebarTouched] = useState(false);
   const [systemMenuOpen, setSystemMenuOpen] = useState(false);
+  const [backgroundTaskActivity, setBackgroundTaskActivity] = useState<BackgroundTaskActivity>({
+    activeCount: 0,
+    attentionCount: 0,
+    unreadCount: 0,
+  });
   const role = session.user.role.trim().toLowerCase();
   const isAdmin = isPlatformAdminRole(role);
   const canManageEnterprise = isAdmin;
@@ -138,6 +137,21 @@ function Workspace({ session }: { session: SessionPayload }) {
   const isKnowledgeLearningPage = knowledgeLearningPages.includes(page);
   const isEnterpriseInsightPage = enterpriseInsightPages.includes(page);
   const isManagementPage = managementPages.includes(page);
+  const taskIndicatorCount = backgroundTaskActivity.unreadCount
+    || backgroundTaskActivity.attentionCount
+    || backgroundTaskActivity.activeCount;
+  const taskIndicatorKind = backgroundTaskActivity.unreadCount
+    ? 'completed'
+    : backgroundTaskActivity.attentionCount
+      ? 'attention'
+      : 'active';
+  const taskNavigationTitle = backgroundTaskActivity.unreadCount
+    ? `任务与交付 · ${backgroundTaskActivity.unreadCount} 个任务已完成`
+    : backgroundTaskActivity.attentionCount
+      ? `任务与交付 · ${backgroundTaskActivity.attentionCount} 个任务需要处理`
+      : backgroundTaskActivity.activeCount
+        ? `任务与交付 · ${backgroundTaskActivity.activeCount} 个任务处理中`
+        : '任务与交付';
   const pageTitle = page === 'assistants'
       ? '助手模式'
       : page === 'chat' || page === 'chat-prototype'
@@ -218,6 +232,49 @@ function Workspace({ session }: { session: SessionPayload }) {
   }, [page, sidebarTouched]);
 
   useEffect(() => {
+    const restore = () => {
+      const location = readWorkspaceLocation(window.location.search);
+      setPage(location.page);
+      setFocusSessionUuid(location.sessionUuid);
+      setFocusProjectUuid(location.projectUuid);
+      setFocusRunId(location.runId);
+      setFocusArtifactId(location.artifactId);
+      setFocusWorkflowId(location.workflowId);
+      setFocusProfessionalDeliverableId(location.deliverableId);
+      setHistoryTab(location.historyTab);
+    };
+    window.addEventListener('popstate', restore);
+    return () => window.removeEventListener('popstate', restore);
+  }, []);
+
+  useEffect(() => {
+    if (page === 'task' || page === 'chat-prototype') return;
+    const search = buildWorkspaceSearch({
+      page,
+      sessionUuid: focusSessionUuid,
+      projectUuid: focusProjectUuid,
+      runId: focusRunId,
+      artifactId: focusArtifactId,
+      workflowId: focusWorkflowId,
+      deliverableId: focusProfessionalDeliverableId,
+      historyTab,
+    });
+    const nextUrl = `${window.location.pathname}${search}${window.location.hash}`;
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    if (nextUrl === currentUrl) return;
+    window.history.pushState({}, '', nextUrl);
+  }, [
+    focusArtifactId,
+    focusProfessionalDeliverableId,
+    focusProjectUuid,
+    focusRunId,
+    focusSessionUuid,
+    focusWorkflowId,
+    historyTab,
+    page,
+  ]);
+
+  useEffect(() => {
     if (!window.__TAURI_INTERNALS__) return;
     const sync = () => {
       syncPendingResults(String(session.user.id), Date.now(), { force: true }).catch(() => undefined);
@@ -290,7 +347,15 @@ function Workspace({ session }: { session: SessionPayload }) {
         <nav aria-label="主导航" className="sidebar-main-nav">
           <button aria-label="对话" title="对话" aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">对话</span></button>
           <button aria-label="项目" title="项目" aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目</span></button>
-          <button aria-label="任务与交付" title="任务与交付" aria-current={isTaskDeliveryPage ? 'page' : undefined} className={isTaskDeliveryPage ? 'is-current' : ''} onClick={() => setPage('tasks')} type="button"><span className="nav-icon" aria-hidden="true">◆</span><span className="nav-label">任务与交付</span></button>
+          <button aria-label="任务与交付" title={taskNavigationTitle} aria-current={isTaskDeliveryPage ? 'page' : undefined} className={isTaskDeliveryPage ? 'is-current' : ''} onClick={() => setPage('tasks')} type="button">
+            <span className="nav-icon" aria-hidden="true">◆</span>
+            <span className="nav-label">任务与交付</span>
+            {taskIndicatorCount ? (
+              <span aria-hidden="true" className={`nav-task-badge is-${taskIndicatorKind}`}>
+                {taskIndicatorKind === 'attention' ? '!' : Math.min(taskIndicatorCount, 99)}
+              </span>
+            ) : null}
+          </button>
           <button aria-label="AI 能力" title="AI 能力" aria-current={isAiCapabilityPage ? 'page' : undefined} className={isAiCapabilityPage ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">AI 能力</span></button>
           <button aria-label="知识与学习" title="知识与学习" aria-current={isKnowledgeLearningPage ? 'page' : undefined} className={isKnowledgeLearningPage ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">知识与学习</span></button>
           {canViewEnterprise ? <button aria-label="企业洞察" title="企业洞察" aria-current={isEnterpriseInsightPage ? 'page' : undefined} className={isEnterpriseInsightPage ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true">◉</span><span className="nav-label">企业洞察</span></button> : null}
@@ -438,7 +503,10 @@ function Workspace({ session }: { session: SessionPayload }) {
         ) : page === 'tasks' ? (
           <TasksPage
             initialRunId={focusRunId}
-            onOpenChat={() => setPage('chat')}
+            onOpenChat={(conversationId) => {
+              setFocusSessionUuid(conversationId || '');
+              setPage('chat');
+            }}
             onOpenArtifact={(artifactId) => {
               setFocusArtifactId(artifactId);
               setHistoryTab('agent');
@@ -457,6 +525,12 @@ function Workspace({ session }: { session: SessionPayload }) {
           </>
         ) : (
           <ChatPage
+            initialProjectUuid={focusProjectUuid}
+            initialSessionUuid={focusSessionUuid}
+            onLocationChange={({ projectUuid, sessionUuid }) => {
+              setFocusProjectUuid(projectUuid);
+              setFocusSessionUuid(sessionUuid);
+            }}
             onOpenTaskCenter={(runId) => {
               if (runId) setFocusRunId(runId);
               setPage('tasks');
@@ -469,6 +543,16 @@ function Workspace({ session }: { session: SessionPayload }) {
         )}
         </div>
       </main>
+      <BackgroundTaskNotifier
+        enabled={isWebRuntime}
+        onActivityChange={setBackgroundTaskActivity}
+        onOpenConversation={(conversationId) => {
+          setFocusSessionUuid(conversationId);
+          setPage('chat');
+        }}
+        onOpenTasks={() => setPage('tasks')}
+        taskCenterOpen={page === 'tasks'}
+      />
     </div>
   );
 }

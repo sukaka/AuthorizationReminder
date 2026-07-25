@@ -766,7 +766,7 @@ services:
       dockerfile: server/Dockerfile
       args: *build_args_python_slim
     environment:
-      APP_VERSION: "5.8.0"
+      APP_VERSION: "5.9.0"
       DATABASE_URL: "mysql+pymysql://ai_assistant_user:${AI_ASSISTANT_MYSQL_PASSWORD}@mysql:3306/juxin_ai_assistant"
       AUTH_SERVICE_URL: "http://auth:5180"
       AUTH_PUBLIC_URL: "${AUTH_PUBLIC_URL:-http://${PUBLIC_HOST:-localhost}:5180}"

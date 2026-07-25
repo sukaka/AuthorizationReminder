@@ -179,6 +179,8 @@ async def chat_sessions(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
     await require_action(
         "ai_assistant:use",
@@ -188,8 +190,14 @@ async def chat_sessions(
     )
     user_id = str(session_payload.user.id)
     _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
-    items = list_chat_sessions(db, sso_user_id=user_id, project_uuid=project_uuid)
-    return ChatSessionListOut(items=items, total=len(items))
+    items, total = list_chat_sessions(
+        db,
+        sso_user_id=user_id,
+        project_uuid=project_uuid,
+        page=page,
+        page_size=page_size,
+    )
+    return ChatSessionListOut(items=items, total=total, page=page, page_size=page_size)
 
 
 async def _require_ai_assistant_use(
@@ -631,17 +639,21 @@ async def active_conversations(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
     _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
-    items = list_chat_sessions(
+    items, total = list_chat_sessions(
         db,
         sso_user_id=user_id,
         status="active",
         project_uuid=project_uuid,
+        page=page,
+        page_size=page_size,
     )
-    return ChatSessionListOut(items=items, total=len(items))
+    return ChatSessionListOut(items=items, total=total, page=page, page_size=page_size)
 
 
 @conversations_router.post("", response_model=ChatSessionItemOut, status_code=201)
@@ -675,17 +687,21 @@ async def archived_conversations(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
     _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
-    items = list_chat_sessions(
+    items, total = list_chat_sessions(
         db,
         sso_user_id=user_id,
         status="archived",
         project_uuid=project_uuid,
+        page=page,
+        page_size=page_size,
     )
-    return ChatSessionListOut(items=items, total=len(items))
+    return ChatSessionListOut(items=items, total=total, page=page, page_size=page_size)
 
 
 @conversations_router.get("/trash", response_model=ChatSessionListOut)
@@ -695,17 +711,21 @@ async def trashed_conversations(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
     await _require_ai_assistant_use(request, session_payload, current_settings)
     user_id = str(session_payload.user.id)
     _require_project_scope(db, project_uuid=project_uuid, user_id=user_id)
-    items = list_chat_sessions(
+    items, total = list_chat_sessions(
         db,
         sso_user_id=user_id,
         status="deleted",
         project_uuid=project_uuid,
+        page=page,
+        page_size=page_size,
     )
-    return ChatSessionListOut(items=items, total=len(items))
+    return ChatSessionListOut(items=items, total=total, page=page, page_size=page_size)
 
 
 @conversations_router.post("/{conversation_id}/archive", response_model=ConversationMutationOut)

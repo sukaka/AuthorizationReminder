@@ -11,6 +11,7 @@ from app.agent_contracts import (
     AgentRunStatus,
     AgentStepContract,
 )
+from app.agent_state_machine import AgentRunStateMachine
 
 
 def test_agent_contracts_serialize_public_run_snapshot() -> None:
@@ -26,12 +27,20 @@ def test_agent_contracts_serialize_public_run_snapshot() -> None:
         title="专项回复",
         status="ready",
         version=1,
+        format="docx",
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        download_ref="/api/artifacts/artifact-1/download",
+        downloadable=True,
+        editable=True,
     )
     run = AgentRunContract(
         run_id="run-1",
+        conversation_id="conversation-1",
         status=AgentRunStatus.SUCCEEDED,
         stage=AgentRunStage.COMPLETED,
         progress=100,
+        attempt=2,
+        next_action="可下载交付成果",
         artifact=artifact,
         citations=[citation],
     )
@@ -54,6 +63,10 @@ def test_agent_contracts_serialize_public_run_snapshot() -> None:
     )
 
     assert run.model_dump(mode="json")["artifact"]["artifact_id"] == "artifact-1"
+    assert run.model_dump(mode="json")["artifact"]["downloadable"] is True
+    assert run.model_dump(mode="json")["attempt"] == 2
+    assert run.model_dump(mode="json")["next_action"] == "可下载交付成果"
+    assert run.model_dump(mode="json")["conversation_id"] == "conversation-1"
     assert step.model_dump(mode="json")["sequence"] == 1
     assert event.model_dump(mode="json")["source"]["location"] == "第 12 页"
 
@@ -98,3 +111,33 @@ def test_agent_event_contract_requires_public_payload_for_event_type() -> None:
                 name="产品手册.pdf",
             ),
         )
+
+    with pytest.raises(ValidationError):
+        AgentEventContract(
+            event_id="event-artifact",
+            run_id="run-1",
+            sequence=2,
+            event_type=AgentEventType.ARTIFACT,
+        )
+
+    with pytest.raises(ValidationError):
+        AgentEventContract(
+            event_id="event-waiting",
+            run_id="run-1",
+            sequence=3,
+            event_type=AgentEventType.WAITING_USER,
+        )
+
+
+def test_waiting_user_contract_and_state_transition() -> None:
+    event = AgentEventContract(
+        event_id="event-waiting",
+        run_id="run-1",
+        sequence=1,
+        event_type=AgentEventType.WAITING_USER,
+        next_action="请补充客户名称后继续",
+    )
+
+    assert event.next_action == "请补充客户名称后继续"
+    assert AgentRunStateMachine.transition("running", "waiting_user") == "waiting_user"
+    assert AgentRunStateMachine.transition("waiting_user", "running") == "running"

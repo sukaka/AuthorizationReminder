@@ -33,6 +33,7 @@ import {
   type ChatGeneratedFile,
   type ChatMode,
   type ChatModeSelection,
+  type ChatResearchPlan,
   type ChatSessionListKind,
   type ChatSessionPayload,
   type ChatTaskStatePayload,
@@ -75,12 +76,15 @@ type UiMessage = {
   generatedFiles?: ChatGeneratedFile[];
   isComplete?: boolean;
   runId?: string;
+  researchPlan?: ChatResearchPlan;
 };
 
 type ChatPageProps = {
   onOpenTaskCenter?: (runId?: string) => void;
   onOpenWorkArtifacts?: () => void;
   initialProjectUuid?: string;
+  initialSessionUuid?: string;
+  onLocationChange?: (location: { projectUuid: string; sessionUuid: string }) => void;
 };
 
 type GeneratedModelResult = Awaited<ReturnType<typeof generateLocalModel>>;
@@ -140,6 +144,14 @@ type TaskProgressView = ChatTaskStatePayload & {
 
 type GenerationStatus = 'idle' | 'running' | 'stopping';
 
+type SendOptions = {
+  modeSelection?: ChatModeSelection;
+  attachmentFileIds?: string[];
+  includePersonalReferences?: boolean;
+  includeSessionAttachments?: boolean;
+  skipUrlCapture?: boolean;
+};
+
 type ActiveGeneration = {
   abortController?: AbortController;
   localRequestId?: string;
@@ -190,6 +202,7 @@ const unsupportedKnowledgeTypeMessage = '当前版本暂不支持该文件类型
 const pdfUploadHint = 'PDF 会按页面提取可复制文本，扫描件需要先转成可复制文本。';
 const fallbackUploadCategories = ['个人素材', '会议纪要', '项目交付', '销售商务', '安全运维', '模板范本', '其他'];
 const fallbackUploadDocumentTypes = ['会议纪要', '解决方案', '投标模板', '管理员手册', '培训材料', '验收报告', '检查记录', '其他'];
+const chatSessionPageSize = 40;
 
 const exportTypeLabels: Record<(typeof wordExportTypes)[number], string> = {
   single_answer: '仅导出本次生成内容',
@@ -964,8 +977,17 @@ function renderChatContent(
   return blocks.length ? blocks : [<p key="empty">正在生成…</p>];
 }
 
-export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProjectUuid }: ChatPageProps = {}) {
+export function ChatPage({
+  onOpenTaskCenter,
+  onOpenWorkArtifacts,
+  initialProjectUuid,
+  initialSessionUuid,
+  onLocationChange,
+}: ChatPageProps = {}) {
   const [sessions, setSessions] = useState<ChatSessionPayload[]>([]);
+  const [sessionTotal, setSessionTotal] = useState(0);
+  const [sessionPage, setSessionPage] = useState(1);
+  const [sessionLoadingMore, setSessionLoadingMore] = useState(false);
   const [projects, setProjects] = useState<ProjectPayload[]>([]);
   const [workspaceType, setWorkspaceType] = useState<'personal' | 'project'>(initialProjectUuid ? 'project' : 'personal');
   const [selectedProjectUuid, setSelectedProjectUuid] = useState(initialProjectUuid || '');
@@ -978,7 +1000,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const mode = modeSelection === 'auto' ? routedMode : modeSelection;
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<UiMessage[]>([]);
-  const [activeSessionUuid, setActiveSessionUuid] = useState('');
+  const [activeSessionUuid, setActiveSessionUuid] = useState(initialSessionUuid || '');
   const [activeSessionStatus, setActiveSessionStatus] = useState<'active' | 'archived' | 'deleted' | ''>('');
   const [sessionListKind, setSessionListKind] = useState<ChatSessionListKind>('active');
   const [selectedSessionIds, setSelectedSessionIds] = useState<string[]>([]);
@@ -1008,7 +1030,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const [generationMetrics, setGenerationMetrics] = useState<GenerationMetrics | null>(null);
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
   const [longTasks, setLongTasks] = useState<LongTaskPayload[]>([]);
-  const [completedLongTaskNotice, setCompletedLongTaskNotice] = useState<LongTaskPayload | null>(null);
   const selectMode = (selection: ChatModeSelection) => {
     setModeSelection(selection);
     setRoutedMode(selection === 'auto' ? 'normal' : selection);
@@ -1020,10 +1041,10 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   const shouldStickToBottomRef = useRef(true);
   const activeGenerationsRef = useRef<Map<string, ActiveGeneration>>(new Map());
   const activeGenerationKeyRef = useRef('');
-  const activeSessionUuidRef = useRef('');
+  const activeSessionUuidRef = useRef(initialSessionUuid || '');
+  const loadedSessionLocationRef = useRef('');
+  const onLocationChangeRef = useRef(onLocationChange);
   const pendingSessionCreationRef = useRef<Promise<ChatSessionPayload> | null>(null);
-  const longTaskStatusesRef = useRef<Map<string, LongTaskPayload['status']>>(new Map());
-  const longTasksInitializedRef = useRef(false);
 
   useEffect(() => {
     activeSessionUuidRef.current = activeSessionUuid;
@@ -1031,11 +1052,49 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
 
   const projectUuid = workspaceType === 'project' ? selectedProjectUuid : undefined;
 
+  useEffect(() => {
+    onLocationChangeRef.current = onLocationChange;
+  }, [onLocationChange]);
+
+  useEffect(() => {
+    onLocationChangeRef.current?.({
+      projectUuid: projectUuid || '',
+      sessionUuid: activeSessionUuid,
+    });
+  }, [activeSessionUuid, projectUuid]);
+
   const refreshSessions = async (kind: ChatSessionListKind = sessionListKind) => {
-    const payload = await getChatSessionsByKind(kind, projectUuid);
+    const payload = await getChatSessionsByKind(kind, projectUuid, {
+      page: 1,
+      pageSize: chatSessionPageSize,
+    });
     setSessions(payload.items);
+    setSessionTotal(payload.total);
+    setSessionPage(payload.page || 1);
     const visibleIds = new Set(payload.items.map((item) => item.session_uuid));
     setSelectedSessionIds((current) => current.filter((id) => visibleIds.has(id)));
+  };
+
+  const loadMoreSessions = async () => {
+    if (sessionLoadingMore || sessions.length >= sessionTotal) return;
+    setSessionLoadingMore(true);
+    try {
+      const nextPage = sessionPage + 1;
+      const payload = await getChatSessionsByKind(sessionListKind, projectUuid, {
+        page: nextPage,
+        pageSize: chatSessionPageSize,
+      });
+      setSessions((current) => {
+        const knownIds = new Set(current.map((item) => item.session_uuid));
+        return current.concat(payload.items.filter((item) => !knownIds.has(item.session_uuid)));
+      });
+      setSessionTotal(payload.total);
+      setSessionPage(payload.page || nextPage);
+    } catch {
+      setStatus('加载更多历史任务失败，请稍后重试');
+    } finally {
+      setSessionLoadingMore(false);
+    }
   };
 
   const ensureActiveChatSession = async (): Promise<string> => {
@@ -1048,6 +1107,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     try {
       const created = await pending;
       if (!activeSessionUuidRef.current) {
+        loadedSessionLocationRef.current = `${projectUuid || ''}:${created.session_uuid}`;
         activeSessionUuidRef.current = created.session_uuid;
         setActiveSessionUuid(created.session_uuid);
         setActiveSessionStatus('active');
@@ -1055,6 +1115,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
           created,
           ...current.filter((item) => item.session_uuid !== created.session_uuid),
         ]);
+        setSessionTotal((current) => current + 1);
       }
       return activeSessionUuidRef.current || created.session_uuid;
     } finally {
@@ -1080,25 +1141,9 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     };
   }, []);
 
-  const applyLongTasks = (tasks: LongTaskPayload[], notifyCompletion = true) => {
-    if (notifyCompletion && longTasksInitializedRef.current) {
-      const newlyCompleted = tasks.find((task) => (
-        task.status === 'completed'
-        && longTaskStatusesRef.current.has(task.task_id)
-        && longTaskStatusesRef.current.get(task.task_id) !== 'completed'
-      ));
-      if (newlyCompleted) setCompletedLongTaskNotice(newlyCompleted);
-    }
-    longTaskStatusesRef.current = new Map(
-      tasks.map((task) => [task.task_id, task.status] as const),
-    );
-    longTasksInitializedRef.current = true;
-    setLongTasks(tasks);
-  };
-
   const refreshLongTasks = async () => {
     const payload = await listLongTasks();
-    applyLongTasks(payload.items);
+    setLongTasks(payload.items);
   };
 
   const replaceLongTask = (task: LongTaskPayload) => {
@@ -1106,8 +1151,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       task,
       ...current.filter((item) => item.task_id !== task.task_id),
     ]);
-    longTaskStatusesRef.current.set(task.task_id, task.status);
-    longTasksInitializedRef.current = true;
   };
 
   const cancelBackgroundTask = async (taskId: string) => {
@@ -1173,7 +1216,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     let active = true;
     listLongTasks()
       .then((payload) => {
-        if (active) applyLongTasks(payload.items, false);
+        if (active) setLongTasks(payload.items);
       })
       .catch(() => undefined);
     return () => {
@@ -1318,7 +1361,8 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     shouldStickToBottomRef.current = distanceToBottom < 96;
   };
 
-  const loadSession = async (sessionUuid: string) => {
+  const loadSession = async (sessionUuid: string, requestedProjectUuid = projectUuid) => {
+    loadedSessionLocationRef.current = `${requestedProjectUuid || ''}:${sessionUuid}`;
     activeSessionUuidRef.current = sessionUuid;
     activeGenerationKeyRef.current = sessionUuid;
     const activeGeneration = activeGenerationsRef.current.get(sessionUuid);
@@ -1326,7 +1370,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     setLastRunId('');
     setStatus('正在加载历史任务…');
     try {
-      const detail = await getChatSession(sessionUuid, projectUuid);
+      const detail = await getChatSession(sessionUuid, requestedProjectUuid);
       if (activeSessionUuidRef.current !== sessionUuid) return;
       setActiveSessionUuid(detail.session_uuid);
       setActiveSessionStatus(normalizeSessionStatus(detail.status));
@@ -1355,6 +1399,33 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       }
     }
   };
+
+  useEffect(() => {
+    const nextProjectUuid = initialProjectUuid?.trim() || '';
+    const nextSessionUuid = initialSessionUuid?.trim() || '';
+    const locationKey = `${nextProjectUuid}:${nextSessionUuid}`;
+    if (loadedSessionLocationRef.current === locationKey) return;
+
+    loadedSessionLocationRef.current = locationKey;
+    setWorkspaceType(nextProjectUuid ? 'project' : 'personal');
+    setSelectedProjectUuid(nextProjectUuid);
+    if (nextSessionUuid) {
+      void loadSession(nextSessionUuid, nextProjectUuid);
+      return;
+    }
+
+    activeSessionUuidRef.current = '';
+    activeGenerationKeyRef.current = '';
+    setGenerationStatus('idle');
+    setActiveSessionUuid('');
+    setActiveSessionStatus('');
+    setMessages([]);
+    setLastRunId('');
+    setSourcePreview({ status: 'idle' });
+    setWebCapture({ status: 'idle' });
+    setTaskProgress(null);
+    setStatus('');
+  }, [initialProjectUuid, initialSessionUuid]);
 
   const uploadKnowledge = async () => {
     if (!pendingUploadFiles.length || uploading) return;
@@ -1609,7 +1680,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     ));
   };
 
-  const send = async (questionOverride?: string) => {
+  const send = async (questionOverride?: string, options: SendOptions = {}) => {
     if (generationStatus === 'running') {
       await stopActiveGeneration();
       return;
@@ -1625,17 +1696,18 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
       setStatus('当前任务已删除，请从回收站恢复后继续');
       return;
     }
+    const selectedMode = options.modeSelection ?? modeSelection;
     const firstUrl = extractFirstWebUrl(trimmed);
-    if (firstUrl) {
+    if (firstUrl && !options.skipUrlCapture) {
       await previewUrlCapture(trimmed, firstUrl);
       return;
     }
-    let requestMode = mode;
+    let requestMode = selectedMode === 'auto' ? routedMode : selectedMode;
     if (!shouldUseServerModel && !activeProfile && requestMode !== 'knowledge') {
       setStatus('请先完成模型设置');
       return;
     }
-    if (modeSelection === 'auto') setRoutingNotice(null);
+    if (selectedMode === 'auto') setRoutingNotice(null);
     shouldStickToBottomRef.current = true;
     setStatus(requestMode === 'knowledge' ? '检索中…' : '生成中…');
     setGenerationStatus('running');
@@ -1680,14 +1752,15 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         sessionUuid: originSessionUuid || undefined,
         projectUuid,
         question: trimmed,
-        mode: modeSelection,
-        attachmentFileIds: sessionAttachmentFiles.map((file) => file.fileUuid),
+        mode: selectedMode,
+        attachmentFileIds: options.attachmentFileIds
+          ?? sessionAttachmentFiles.map((file) => file.fileUuid),
         personalReferenceFileIds: [],
-        includePersonalReferences: true,
-        includeSessionAttachments: true,
+        includePersonalReferences: options.includePersonalReferences ?? true,
+        includeSessionAttachments: options.includeSessionAttachments ?? true,
       });
       requestMode = normalizeMode(prepared.effective_mode || requestMode);
-      if (modeSelection === 'auto') {
+      if (selectedMode === 'auto') {
         setRoutedMode(requestMode);
         if (prepared.effective_mode || prepared.routing_reason) {
           setRoutingNotice({
@@ -1713,6 +1786,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         if (generationWasActive) activeGenerationKeyRef.current = generationKey;
       }
       if (!originSessionUuid && activeSessionUuidRef.current === '') {
+        loadedSessionLocationRef.current = `${projectUuid || ''}:${prepared.session_uuid}`;
         activeSessionUuidRef.current = prepared.session_uuid;
         setActiveSessionUuid(prepared.session_uuid);
       }
@@ -1738,6 +1812,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
           generatedFiles: prepared.generated_files ?? [],
           isComplete: true,
           runId: prepared.run_id || undefined,
+          researchPlan: prepared.research_plan || undefined,
         }));
         if (requestIsVisible()) {
           setStatus(prepared.run_id ? `回答完成 · 任务 ${prepared.run_id.slice(0, 8)}` : '');
@@ -1760,6 +1835,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         generatedFiles: [],
         isComplete: false,
         runId: prepared.run_id || undefined,
+        researchPlan: prepared.research_plan || undefined,
       }));
       if (shouldUseServerModel && prepared.execution_mode === 'background') {
         const queued = await createLongChatTask({
@@ -1773,10 +1849,16 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
         replaceLongTask(queued);
         updateRequestMessages((current) => current.map((message) =>
           message.id === assistantId
-            ? { ...message, content: '已进入后台处理，可继续其他工作。', isComplete: true }
+            ? {
+                ...message,
+                content: prepared.research_plan
+                  ? '已进入后台深度研究，可继续其他工作。完成后会通知你。'
+                  : '已进入后台处理，可继续其他工作。',
+                isComplete: true,
+              }
             : message,
         ));
-        setStatus('已进入后台处理');
+        setStatus(prepared.research_plan ? '已进入后台深度研究' : '已进入后台处理');
         return;
       }
       if (shouldUseServerModel) {
@@ -2280,9 +2362,26 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
     void send(source.content);
   };
 
+  const continueLatestTaskWithoutTools = () => {
+    const source = [...messages].reverse().find((message) => message.role === 'user');
+    if (!source) {
+      setStatus('未找到可继续回答的原始问题');
+      return;
+    }
+    setStatus('正在改用普通回答…');
+    void send(source.content, {
+      modeSelection: 'normal',
+      attachmentFileIds: [],
+      includePersonalReferences: false,
+      includeSessionAttachments: false,
+      skipUrlCapture: true,
+    });
+  };
+
   const switchWorkspace = (nextProjectUuid: string) => {
     if (nextProjectUuid === projectUuid) return;
     if (generationStatus === 'running') void stopActiveGeneration();
+    loadedSessionLocationRef.current = `${nextProjectUuid}:`;
     activeSessionUuidRef.current = '';
     activeGenerationKeyRef.current = '';
     setGenerationStatus('idle');
@@ -2308,6 +2407,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
   };
 
   const startNewSession = () => {
+    loadedSessionLocationRef.current = `${projectUuid || ''}:`;
     activeSessionUuidRef.current = '';
     activeGenerationKeyRef.current = '';
     setGenerationStatus('idle');
@@ -2609,6 +2709,18 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
               </div>
             );
           })}
+          {sessions.length < sessionTotal ? (
+            <button
+              className="chat-session-load-more"
+              disabled={sessionLoadingMore}
+              onClick={() => void loadMoreSessions()}
+              type="button"
+            >
+              {sessionLoadingMore
+                ? '正在加载…'
+                : `加载更多（已显示 ${sessions.length} / ${sessionTotal}）`}
+            </button>
+          ) : null}
           {sidebarStatus ? (
             <p className="chat-sidebar-status" role="status">{sidebarStatus}</p>
           ) : null}
@@ -2783,6 +2895,31 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                           ? renderChatContent(message.content, citationReferences)
                           : <p>{message.content || '正在生成…'}</p>}
                       </div>
+                      {message.researchPlan ? (
+                        <details className="chat-research-plan" open>
+                          <summary>自动研究计划</summary>
+                          <p>{message.researchPlan.objective}</p>
+                          <ol>
+                            {message.researchPlan.questions.map((researchQuestion) => (
+                              <li key={researchQuestion}>{researchQuestion}</li>
+                            ))}
+                          </ol>
+                          <dl>
+                            <div>
+                              <dt>来源范围</dt>
+                              <dd>{message.researchPlan.source_scope}</dd>
+                            </div>
+                            <div>
+                              <dt>引用规则</dt>
+                              <dd>{message.researchPlan.citation_policy}</dd>
+                            </div>
+                            <div>
+                              <dt>不确定性</dt>
+                              <dd>{message.researchPlan.uncertainty_policy}</dd>
+                            </div>
+                          </dl>
+                        </details>
+                      ) : null}
                       {citationReferences.some((reference) => (
                         reference.citation.media_type?.startsWith('image/')
                         && reference.citation.asset_url
@@ -3052,6 +3189,7 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
               <ChatRunContext
                 messages={messages}
                 metrics={generationMetrics}
+                onContinueWithoutTools={continueLatestTaskWithoutTools}
                 onOpenTaskCenter={onOpenTaskCenter}
                 onRetry={retryLatestTask}
                 onStop={generationActive ? () => void stopActiveGeneration() : undefined}
@@ -3453,31 +3591,6 @@ export function ChatPage({ onOpenTaskCenter, onOpenWorkArtifacts, initialProject
                 </footer>
               </div>
             </div>
-          ) : null}
-          {completedLongTaskNotice ? (
-            <section aria-label="后台任务完成" className="chat-long-task-notice" role="status">
-              <div>
-                <strong>后台任务已完成</strong>
-                <span title={completedLongTaskNotice.title}>{completedLongTaskNotice.title}</span>
-              </div>
-              <button
-                onClick={() => {
-                  void loadSession(completedLongTaskNotice.conversation_id);
-                  setCompletedLongTaskNotice(null);
-                }}
-                type="button"
-              >
-                查看结果
-              </button>
-              <button
-                aria-label="关闭完成提醒"
-                className="chat-long-task-notice-close"
-                onClick={() => setCompletedLongTaskNotice(null)}
-                type="button"
-              >
-                ×
-              </button>
-            </section>
           ) : null}
           {longTasks.length ? (
             <aside aria-label="后台任务" className="chat-long-task-tray" role="region">

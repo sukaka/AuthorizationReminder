@@ -11,15 +11,19 @@ import {
   type SkillPayload,
   type SkillRunPayload,
 } from '../api/client';
+import { uploadKnowledgeFile } from '../api/chat';
 
 function materialText(skill: SkillPayload): string {
   if (!skill.requires_attachment) return '可直接填写说明，也可补充附件';
   return `需要材料：${skill.input_types.join('、')}`;
 }
 
-function defaultAttachment(skill: SkillPayload) {
-  const fileType = skill.input_types.find((item) => item !== 'text') || 'docx';
-  return [{ name: `待处理材料.${fileType}`, file_type: fileType }];
+function fileExtension(file: File): string {
+  return file.name.split('.').pop()?.trim().toLowerCase() || '其他';
+}
+
+function attachmentTypes(skill: SkillPayload): string[] {
+  return skill.input_types.filter((item) => item !== 'text');
 }
 
 export function SkillsPage() {
@@ -31,6 +35,8 @@ export function SkillsPage() {
   const [uploading, setUploading] = useState(false);
   const [question, setQuestion] = useState('');
   const [downloading, setDownloading] = useState('');
+  const [inputFiles, setInputFiles] = useState<Record<string, File | undefined>>({});
+  const [runningSkillId, setRunningSkillId] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -63,21 +69,45 @@ export function SkillsPage() {
       setNotice(`“${skill.name}”当前状态为${skill.status}，暂不可使用。`);
       return;
     }
+    const inputFile = inputFiles[skill.id];
+    if (skill.requires_attachment && !inputFile) {
+      setNotice(`请先为“${skill.name}”选择处理材料。`);
+      return;
+    }
     setNotice(`正在运行：${skill.name}`);
     setResult(null);
+    setRunningSkillId(skill.id);
     try {
+      const attachments = inputFile
+        ? await uploadKnowledgeFile(inputFile, {
+            usageType: 'skill_input',
+            ragEnabled: false,
+            referenceEnabled: false,
+            ragScope: 'none',
+            permissionScope: 'private',
+            category: 'Skill 输入',
+            documentType: fileExtension(inputFile),
+          }).then((uploaded) => [{
+            file_uuid: uploaded.file_uuid,
+            name: uploaded.file_name,
+            file_type: uploaded.file_type,
+            file_size: uploaded.file_size,
+          }])
+        : [];
       const payload = await runSkill(skill.id, {
         task_id: `skill-${skill.id}`,
         input: {
           question: question.trim() || `请执行${skill.name}`,
-          ...(skill.requires_attachment ? { attachments: defaultAttachment(skill) } : {}),
+          ...(attachments.length ? { attachments } : {}),
           ...(skill.id === 'dashi-ppt' ? { options: { output_format: 'pptx' } } : {}),
         },
       });
       setResult(payload);
       setNotice('能力已完成，成果已生成。');
     } catch {
-      setNotice('能力运行失败，请稍后重试。');
+      setNotice('材料上传或能力运行失败，请稍后重试。');
+    } finally {
+      setRunningSkillId('');
     }
   };
 
@@ -105,8 +135,12 @@ export function SkillsPage() {
     }
   };
 
-  const renderCard = (skill: SkillPayload, index: number, personal = false) => (
-    <article key={skill.id} className="history-card skill-card">
+  const renderCard = (skill: SkillPayload, index: number, personal = false) => {
+    const supportedAttachments = attachmentTypes(skill);
+    const selectedFile = inputFiles[skill.id];
+    const isRunning = runningSkillId === skill.id;
+    return (
+      <article key={skill.id} className="history-card skill-card">
       <div className="skill-card-head">
         <span className="skill-card-icon" aria-hidden="true">{['✦', '✓', '⌁'][index % 3]}</span>
         <span className="knowledge-source-badge">
@@ -124,15 +158,36 @@ export function SkillsPage() {
           <dd><span>可生成：</span><span>{skill.output_types.join('、')}</span></dd>
         </div>
       </dl>
+      {supportedAttachments.length ? (
+        <label className="skill-input-upload">
+          <span>
+            {selectedFile
+              ? `已选择：${selectedFile.name}`
+              : skill.requires_attachment ? '选择处理材料' : '补充材料（可选）'}
+          </span>
+          <small>支持 {supportedAttachments.join('、')}</small>
+          <input
+            accept={supportedAttachments.map((item) => `.${item}`).join(',')}
+            aria-label={`上传${skill.name}材料`}
+            disabled={isRunning}
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              setInputFiles((current) => ({ ...current, [skill.id]: file }));
+            }}
+            type="file"
+            hidden
+          />
+        </label>
+      ) : null}
       <div className="history-actions">
         <button
           aria-label={`开始使用 ${skill.name}`}
           className="primary-action"
-          disabled={skill.status !== 'published'}
+          disabled={skill.status !== 'published' || isRunning}
           onClick={() => void start(skill)}
           type="button"
         >
-          开始使用 <span aria-hidden="true">→</span>
+          {isRunning ? '处理中…' : '开始使用'} <span aria-hidden="true">→</span>
         </button>
         {personal ? (
           <button onClick={() => void disable(skill)} type="button" disabled={skill.status === 'disabled'}>
@@ -140,8 +195,9 @@ export function SkillsPage() {
           </button>
         ) : null}
       </div>
-    </article>
-  );
+      </article>
+    );
+  };
 
   const commonSkills = skills.filter((skill) => skill.source !== 'uploaded' || skill.scope === 'company');
 
@@ -209,10 +265,14 @@ export function SkillsPage() {
           <p>{String(result.result.summary || '')}</p>
           <div className="history-list">
             {result.artifacts.map((artifact) => (
-              <article className="history-card" key={`${artifact.kind}-${artifact.title}`}>
+              <article className="history-card" key={artifact.artifact_id}>
                 <strong>{artifact.title}</strong>
-                <span>{artifact.kind}</span>
-                {artifact.download_url ? (
+                <span>
+                  {(artifact.format || artifact.kind).toUpperCase()} ·{' '}
+                  {artifact.editable ? '可编辑' : '只读'}
+                  {artifact.downloadable ? ' · 可下载' : ''}
+                </span>
+                {artifact.downloadable && artifact.download_url ? (
                   <button
                     disabled={downloading === artifact.download_url}
                     onClick={() => {

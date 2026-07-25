@@ -655,6 +655,63 @@ def test_latest_question_web_search_failure_records_task_state_and_continues(
     assert log.status == "failed"
 
 
+def test_deep_research_builds_plan_and_deduplicates_multi_query_sources(
+    client_for_user,
+    monkeypatch,
+    generation_db,
+) -> None:
+    from app import chat_service
+
+    queries: list[str] = []
+
+    def fake_search(_self, query: str, *, limit: int = 5, **_kwargs) -> list[WebSearchResult]:
+        queries.append(query)
+        query_index = len(queries)
+        return [
+            WebSearchResult(
+                title="共同权威来源",
+                url="https://example.com/shared",
+                site_name="example.com",
+                snippet="可用于交叉核验的共同来源。",
+                fetched_at=datetime(2026, 7, 3, tzinfo=UTC),
+            ),
+            WebSearchResult(
+                title=f"研究维度 {query_index}",
+                url=f"https://example.com/research-{query_index}",
+                site_name="example.com",
+                snippet=f"研究维度 {query_index} 的公开资料。",
+                fetched_at=datetime(2026, 7, 3, tzinfo=UTC),
+            ),
+        ]
+
+    monkeypatch.setattr(chat_service.WebSearchService, "search", fake_search)
+    client = client_for_user("user-deep-research")
+
+    prepared = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "请深度研究企业智能体市场并给出可核验结论", "mode": "normal"},
+    )
+
+    assert prepared.status_code == 201
+    body = prepared.json()
+    assert body["completed"] is False
+    assert body["execution_mode"] == "background"
+    assert body["research_plan"]["objective"] == "请深度研究企业智能体市场并给出可核验结论"
+    assert len(body["research_plan"]["questions"]) == 7
+    assert len(queries) == 7
+    assert len(body["citations"]) == 8
+    assert "【自动深度研究计划】" in body["messages"][0]["content"]
+    assert "【联网搜索结果】" in body["messages"][0]["content"]
+    assert body["task_state"]["tool_calls"][-1]["tool_name"] == "web_search"
+    assert body["task_state"]["tool_calls"][-1]["status"] == "success"
+    assert "7/7" in body["task_state"]["tool_calls"][-1]["summary"]
+    logs = generation_db.scalars(
+        select(WebSearchLog).where(WebSearchLog.user_id == "user-deep-research")
+    ).all()
+    assert len(logs) == 7
+    assert all(log.answer_message_id == body["assistant_message_uuid"] for log in logs)
+
+
 def test_plain_writing_question_does_not_trigger_web_search(client_for_user, monkeypatch) -> None:
     from app import chat_service
 
@@ -1628,6 +1685,29 @@ def test_empty_conversation_can_be_created_for_a_temporary_attachment(
     assert prepared.status_code == 201, prepared.text
     assert prepared.json()["session_uuid"] == body["session_uuid"]
     assert client.get("/api/conversations").json()["items"][0]["title"] == "参考临时附件整理内容"
+
+
+def test_conversation_list_supports_stable_pagination(client_for_user) -> None:
+    client = client_for_user("conversation-pagination-owner")
+    created_session_ids = {
+        client.post("/api/conversations").json()["session_uuid"] for _ in range(3)
+    }
+
+    first_page = client.get("/api/conversations?page=1&page_size=2")
+    second_page = client.get("/api/conversations?page=2&page_size=2")
+
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+    assert first_page.json()["total"] == 3
+    assert first_page.json()["page"] == 1
+    assert first_page.json()["page_size"] == 2
+    assert len(first_page.json()["items"]) == 2
+    assert second_page.json()["page"] == 2
+    assert len(second_page.json()["items"]) == 1
+    first_page_ids = {item["session_uuid"] for item in first_page.json()["items"]}
+    second_page_ids = {item["session_uuid"] for item in second_page.json()["items"]}
+    assert first_page_ids.isdisjoint(second_page_ids)
+    assert first_page_ids | second_page_ids == created_session_ids
 
 
 def test_conversation_archive_trash_restore_and_hard_delete_flow(

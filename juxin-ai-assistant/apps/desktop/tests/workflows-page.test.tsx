@@ -114,6 +114,83 @@ it('opens builder for drag orchestration', async () => {
   expect(screen.getByLabelText('编排画布预览')).toBeInTheDocument();
 });
 
+it('creates and pauses an automatic run from a plain-language schedule', async () => {
+  const createBody = vi.fn();
+  const disableSchedule = vi.fn();
+  server.use(
+    http.get('/api/ai/workflows', () => HttpResponse.json({ items: workflows, total: 2 })),
+    http.get('/api/ai/workflows/schedules', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/workflows/:id', ({ params }) =>
+      HttpResponse.json({
+        id: String(params.id),
+        name: '流程定义',
+        description: '测试流程',
+        steps: [],
+      }),
+    ),
+    http.post('/api/ai/workflows/schedules', async ({ request }) => {
+      const body = await request.json() as Record<string, unknown>;
+      createBody(body);
+      return HttpResponse.json({
+        schedule_uuid: 'schedule-1',
+        owner_user_id: 'user-1',
+        workflow_id: body.workflow_id,
+        name: body.name,
+        cron_expression: body.cron_expression,
+        timezone: body.timezone,
+        enabled: true,
+        next_fire_at: '2026-07-27T01:00:00Z',
+        last_fire_at: null,
+        misfire_policy: 'skip',
+        catch_up: false,
+        concurrency_policy: 'forbid',
+        idempotency_prefix: body.idempotency_prefix,
+        metadata: body.metadata,
+      }, { status: 201 });
+    }),
+    http.post('/api/ai/workflows/schedules/schedule-1/disable', () => {
+      disableSchedule();
+      return HttpResponse.json({
+        schedule_uuid: 'schedule-1',
+        owner_user_id: 'user-1',
+        workflow_id: 'parallel_dual',
+        name: '并行：摘要+回声 · 每个工作日 09:00',
+        cron_expression: '0 9 * * 1-5',
+        timezone: 'Asia/Shanghai',
+        enabled: false,
+        next_fire_at: null,
+        last_fire_at: null,
+        misfire_policy: 'skip',
+        catch_up: false,
+        concurrency_policy: 'forbid',
+        idempotency_prefix: 'ui-parallel_dual',
+        metadata: {},
+      });
+    }),
+  );
+
+  render(<WorkflowsPage />);
+  await screen.findByRole('heading', { name: '工作流' });
+  await userEvent.click(screen.getByRole('button', { name: '设置自动运行' }));
+  expect(await screen.findByRole('region', { name: '自动运行设置' })).toBeInTheDocument();
+  expect(screen.getByText('每个工作日 09:00')).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '创建自动运行' }));
+  await waitFor(() => expect(createBody).toHaveBeenCalledWith(expect.objectContaining({
+    workflow_id: 'parallel_dual',
+    cron_expression: '0 9 * * 1-5',
+    concurrency_policy: 'forbid',
+    metadata: expect.objectContaining({
+      input_text: '请对这段业务说明做简短摘要，便于汇报。',
+    }),
+  })));
+  expect(await screen.findByText(/下次：/)).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '暂停' }));
+  await waitFor(() => expect(disableSchedule).toHaveBeenCalled());
+    expect(await screen.findByRole("button", { name: "恢复" })).toBeInTheDocument();
+});
+
 it('keeps the workflow library searchable and filterable', async () => {
   server.use(
     http.get('/api/ai/workflows', () => HttpResponse.json({

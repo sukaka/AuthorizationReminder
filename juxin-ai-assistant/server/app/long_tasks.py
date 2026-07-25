@@ -5,7 +5,7 @@ from typing import Any
 import uuid as uuid_lib
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .chat_service import complete_chat_message
@@ -80,19 +80,32 @@ class LongTaskService:
             draft_ciphertext=b"",
             draft_nonce=b"",
             key_version=key_version,
-            checkpoint_json={"stage": "queued"},
+            checkpoint_json={"stage": "queued", "next_action": "等待后台处理"},
             result_json={},
         )
         self.db.add(row)
         self.db.flush()
         return row
 
-    def list_for_owner(self, owner_user_id: str) -> list[LongTask]:
-        return list(self.db.scalars(
+    def list_for_owner(
+        self,
+        owner_user_id: str,
+        *,
+        page: int = 1,
+        page_size: int = 50,
+    ) -> tuple[list[LongTask], int]:
+        owner_filter = LongTask.owner_user_id == owner_user_id
+        total = int(self.db.scalar(
+            select(func.count(LongTask.id)).where(owner_filter)
+        ) or 0)
+        rows = list(self.db.scalars(
             select(LongTask)
-            .where(LongTask.owner_user_id == owner_user_id)
+            .where(owner_filter)
             .order_by(LongTask.updated_at.desc(), LongTask.id.desc())
+            .offset((page - 1) * page_size)
+            .limit(page_size)
         ))
+        return rows, total
 
     def get(self, task_id: str, *, owner_user_id: str | None = None) -> LongTask:
         conditions = [LongTask.uuid == task_id]
@@ -111,7 +124,11 @@ class LongTaskService:
         row.status = "cancelled"
         row.stage = "cancelled"
         row.finished_at = datetime.now(UTC).replace(tzinfo=None)
-        row.checkpoint_json = {**(row.checkpoint_json or {}), "stage": "cancelled"}
+        row.checkpoint_json = {
+            **(row.checkpoint_json or {}),
+            "stage": "cancelled",
+            "next_action": "任务已取消",
+        }
         self.db.flush()
         return row
 
@@ -127,6 +144,10 @@ class LongTaskService:
         row.error_code = ""
         row.error_message_safe = ""
         row.finished_at = None
+        row.checkpoint_json = {
+            **(row.checkpoint_json or {}),
+            "next_action": "正在重新进入处理队列",
+        }
         self.db.flush()
         return row
 
@@ -138,7 +159,11 @@ class LongTaskService:
         row.stage = "generating"
         row.progress = max(5, row.progress)
         row.started_at = row.started_at or datetime.now(UTC).replace(tzinfo=None)
-        row.checkpoint_json = {**(row.checkpoint_json or {}), "stage": "generating"}
+        row.checkpoint_json = {
+            **(row.checkpoint_json or {}),
+            "stage": "generating",
+            "next_action": "正在生成内容",
+        }
         self.db.flush()
         return row
 
@@ -160,6 +185,7 @@ class LongTaskService:
             **(row.checkpoint_json or {}),
             "stage": checkpoint,
             "draft_chars": len(draft),
+            "next_action": "正在继续生成内容",
         }
         self.db.flush()
         return row
@@ -174,9 +200,15 @@ class LongTaskService:
     ) -> LongTask:
         row = self.get(task_id, owner_user_id=owner_user_id)
         row.status = "failed"
+        row.stage = "failed"
         row.error_code = error_code[:64]
         row.error_message_safe = error_message[:500]
         row.finished_at = datetime.now(UTC).replace(tzinfo=None)
+        row.checkpoint_json = {
+            **(row.checkpoint_json or {}),
+            "stage": "failed",
+            "next_action": "请检查失败原因后重试",
+        }
         self.db.flush()
         return row
 
@@ -188,7 +220,11 @@ class LongTaskService:
         row.finished_at = datetime.now(UTC).replace(tzinfo=None)
         row.error_code = ""
         row.error_message_safe = ""
-        row.checkpoint_json = {**(row.checkpoint_json or {}), "stage": "completed"}
+        row.checkpoint_json = {
+            **(row.checkpoint_json or {}),
+            "stage": "completed",
+            "next_action": "可打开完整结果",
+        }
         self.db.flush()
         return row
 
@@ -208,6 +244,7 @@ class LongTaskService:
         return str(payload.get("draft") or "")
 
     def public_out(self, row: LongTask) -> LongTaskOut:
+        next_action = str((row.checkpoint_json or {}).get("next_action") or "")
         return LongTaskOut(
             task_id=row.uuid,
             task_type=row.task_type,
@@ -221,6 +258,7 @@ class LongTaskService:
             draft=self.draft(row),
             error_code=row.error_code,
             error_message=row.error_message_safe,
+            next_action=next_action,
             retry_allowed=row.status == "failed",
             cancel_allowed=row.status in RUNNING_STATUSES,
             created_at=row.created_at,

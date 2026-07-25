@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { ApiError, isSafeSameOriginUrl, type SessionPayload } from '../api/client';
 import { isPlatformAdminRole } from '../auth/roles';
 import {
+  activateKnowledgeFileVersion,
   archiveKnowledgeFile,
   askKnowledge,
   askKnowledgeFile,
@@ -25,6 +26,7 @@ import {
   listKnowledgeBases,
   listKnowledgeFileTrash,
   listKnowledgeFiles,
+  listKnowledgeFileVersions,
   listKnowledgeReviewHistory,
   listPendingKnowledgeReviews,
   previewKnowledgeFile,
@@ -42,6 +44,7 @@ import {
   type KnowledgeFilePayload,
   type KnowledgeFilePreviewPayload,
   type KnowledgeFileSourcePayload,
+  type KnowledgeFileVersionTimelinePayload,
   type KnowledgeReviewLogPayload,
   updateKnowledgeCategory,
   updateKnowledgeDocumentType,
@@ -61,7 +64,12 @@ type KnowledgeDictionaryDrawerMode =
   | 'editCategory'
   | 'createDocumentType'
   | 'editDocumentType';
-type KnowledgeRiskFilter = 'all' | 'parseFailed' | 'notIndexed' | 'pendingReview' | 'ragDisabled';
+type KnowledgeRiskFilter = 'all' | 'parseFailed' | 'notIndexed' | 'pendingReview' | 'ragDisabled' | 'duplicate';
+type KnowledgeHealth = {
+  label: string;
+  detail: string;
+  tone: 'healthy' | 'attention' | 'blocked' | 'inactive';
+};
 type KnowledgeBaseScope = 'company' | 'department' | 'project';
 type KnowledgeUploadPurpose = 'personal_reference' | 'official_knowledge';
 type KnowledgeReviewApprovalDraft = {
@@ -153,10 +161,18 @@ function knowledgeFileParseFailed(file: KnowledgeFilePayload): boolean {
   return file.status === 'FAILED' || file.parse_status === 'failed';
 }
 
+function knowledgeFileParsed(file: KnowledgeFilePayload): boolean {
+  return file.parse_status === 'parsed' || file.parse_status === 'ready';
+}
+
+function knowledgeFileIndexed(file: KnowledgeFilePayload): boolean {
+  return file.index_status === 'indexed' || file.index_status === 'ready';
+}
+
 function knowledgeFileNotIndexed(file: KnowledgeFilePayload): boolean {
   return file.usage_type === 'official_knowledge'
     && !knowledgeFileParseFailed(file)
-    && file.index_status !== 'ready';
+    && !knowledgeFileIndexed(file);
 }
 
 function knowledgeFileRagDisabled(file: KnowledgeFilePayload): boolean {
@@ -165,12 +181,95 @@ function knowledgeFileRagDisabled(file: KnowledgeFilePayload): boolean {
     && file.rag_enabled !== true;
 }
 
-function knowledgeFileMatchesRiskFilter(file: KnowledgeFilePayload, filter: KnowledgeRiskFilter): boolean {
+function knowledgeFileMatchesRiskFilter(
+  file: KnowledgeFilePayload,
+  filter: KnowledgeRiskFilter,
+  duplicateHashes: ReadonlySet<string>,
+): boolean {
   if (filter === 'parseFailed') return knowledgeFileParseFailed(file);
   if (filter === 'notIndexed') return knowledgeFileNotIndexed(file);
   if (filter === 'pendingReview') return file.review_status === 'pending';
   if (filter === 'ragDisabled') return knowledgeFileRagDisabled(file);
+  if (filter === 'duplicate') return Boolean(file.content_sha256 && duplicateHashes.has(file.content_sha256));
   return true;
+}
+
+function knowledgeFileHealth(file: KnowledgeFilePayload, isDuplicate: boolean): KnowledgeHealth {
+  if (knowledgeFileParseFailed(file)) {
+    return {
+      label: '无法用于回答',
+      detail: '文件内容读取失败。请重新处理；仍失败时请检查文件是否损坏或为扫描件。',
+      tone: 'blocked',
+    };
+  }
+  if (file.review_status === 'rejected') {
+    return {
+      label: '审核未通过',
+      detail: '这份资料不会进入公司资料查找，请根据审核意见修改后重新上传。',
+      tone: 'blocked',
+    };
+  }
+  if (file.review_status === 'pending') {
+    return {
+      label: '等待管理员审核',
+      detail: '审核通过前不会用于公司共享回答，个人上传人仍可在自己的资料中查看。',
+      tone: 'attention',
+    };
+  }
+  if (knowledgeFileNotIndexed(file)) {
+    return {
+      label: '尚未进入资料查找',
+      detail: '文件已保存但检索索引未完成，请重新处理后再用于问答。',
+      tone: 'attention',
+    };
+  }
+  if (isDuplicate) {
+    return {
+      label: '存在相同内容',
+      detail: '系统发现内容完全相同的资料，建议保留有效版本，避免回答时重复引用。',
+      tone: 'attention',
+    };
+  }
+  if (file.is_current_version === false) {
+    return {
+      label: '历史版本',
+      detail: '当前版本仅用于追溯，不参与最新资料的检索和回答。',
+      tone: 'inactive',
+    };
+  }
+  if (
+    file.status === 'READY'
+    && knowledgeFileParsed(file)
+    && knowledgeFileIndexed(file)
+    && file.chunk_count === 0
+  ) {
+    return {
+      label: '没有可检索内容',
+      detail: '文件已处理，但没有提取到可搜索文字；扫描件请先完成文字识别。',
+      tone: 'attention',
+    };
+  }
+  if (knowledgeFileRagDisabled(file)) {
+    return {
+      label: '资料查找未启用',
+      detail: '文件已处理完成，但当前不会用于公司资料问答；管理员可在“更多”中启用。',
+      tone: 'inactive',
+    };
+  }
+  if (file.reference_enabled === false) {
+    return {
+      label: '暂不参与生成',
+      detail: '文件已保存，但不会作为 AI 生成内容的参考资料。',
+      tone: 'inactive',
+    };
+  }
+  return {
+    label: '可正常使用',
+    detail: file.usage_type === 'official_knowledge'
+      ? '可用于公司资料查找和有来源的回答。'
+      : '可在你的任务中作为参考资料使用。',
+    tone: 'healthy',
+  };
 }
 
 function fileUsageLabel(file: KnowledgeFilePayload): string {
@@ -306,6 +405,13 @@ function dictionaryDateLabel(value: string): string {
   return date.toLocaleDateString('zh-CN');
 }
 
+function knowledgeVersionTimeLabel(value: string): string {
+  if (!value) return '时间未知';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '时间未知';
+  return date.toLocaleString('zh-CN');
+}
+
 function categorySelectionNames(selectedCategoryName: string, categories: KnowledgeCategoryPayload[]): string[] {
   if (!categories.length || selectedCategoryName === '全部资料') return [selectedCategoryName];
   const activeCategories = categories.filter((category) => category.status === 'ACTIVE');
@@ -336,6 +442,10 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const [notice, setNotice] = useState('');
   const [preview, setPreview] = useState<KnowledgeFilePreviewPayload | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [versionFileName, setVersionFileName] = useState('');
+  const [versionTimeline, setVersionTimeline] = useState<KnowledgeFileVersionTimelinePayload | null>(null);
+  const [versionTimelineLoading, setVersionTimelineLoading] = useState(false);
+  const [versionTimelineNotice, setVersionTimelineNotice] = useState('');
   const [fileAction, setFileAction] = useState<{
     fileName: string;
     question: string;
@@ -486,7 +596,19 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const categoryFilteredFiles = selectedCategoryName === '全部资料'
     ? files
     : files.filter((file) => selectedCategoryNames.includes(file.category || '未分类'));
-  const displayedFiles = categoryFilteredFiles.filter((file) => knowledgeFileMatchesRiskFilter(file, riskFilter));
+  const contentHashCounts = files.reduce<Map<string, number>>((counts, file) => {
+    if (!file.content_sha256 || file.is_current_version === false) return counts;
+    counts.set(file.content_sha256, (counts.get(file.content_sha256) || 0) + 1);
+    return counts;
+  }, new Map());
+  const duplicateContentHashes = new Set(
+    Array.from(contentHashCounts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([hash]) => hash),
+  );
+  const displayedFiles = categoryFilteredFiles.filter((file) => (
+    knowledgeFileMatchesRiskFilter(file, riskFilter, duplicateContentHashes)
+  ));
   const existingKnowledgeFileNames = new Set(files.map((file) => normalizedKnowledgeFileName(file.file_name)));
   const duplicateUploadFileNames = Array.from(new Set(
     pendingUploadFiles
@@ -501,6 +623,9 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const parseFailedFiles = files.filter(knowledgeFileParseFailed).length;
   const notIndexedFiles = files.filter(knowledgeFileNotIndexed).length;
   const ragDisabledFiles = files.filter(knowledgeFileRagDisabled).length;
+  const duplicateFiles = files.filter((file) => (
+    Boolean(file.content_sha256 && duplicateContentHashes.has(file.content_sha256))
+  )).length;
   const dictionaryDrawerTitle = dictionaryDrawerMode === 'createCategory'
     ? '新建分类'
     : dictionaryDrawerMode === 'editCategory'
@@ -877,6 +1002,43 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
     window.open(downloadUrl, '_blank', 'noopener,noreferrer');
   };
 
+  const openVersionTimeline = async (file: KnowledgeFilePayload) => {
+    closeFileMenu();
+    setVersionFileName(file.file_name);
+    setVersionTimeline(null);
+    setVersionTimelineNotice('');
+    setVersionTimelineLoading(true);
+    try {
+      setVersionTimeline(await listKnowledgeFileVersions(file.file_uuid));
+    } catch {
+      setVersionTimelineNotice('暂时无法读取版本记录，请稍后重试。');
+    } finally {
+      setVersionTimelineLoading(false);
+    }
+  };
+
+  const activateVersion = async (fileUuid: string) => {
+    setVersionTimelineNotice('');
+    setVersionTimelineLoading(true);
+    try {
+      const timeline = await activateKnowledgeFileVersion(fileUuid);
+      setVersionTimeline(timeline);
+      const currentVersionByUuid = new Map(
+        timeline.items.map((item) => [item.file_uuid, item.is_current_version]),
+      );
+      setFiles((current) => current.map((file) => (
+        currentVersionByUuid.has(file.file_uuid)
+          ? { ...file, is_current_version: currentVersionByUuid.get(file.file_uuid) }
+          : file
+      )));
+      setVersionTimelineNotice('已切换当前生效版本，后续问答将使用该版本。');
+    } catch {
+      setVersionTimelineNotice('暂时无法切换版本，请稍后重试。');
+    } finally {
+      setVersionTimelineLoading(false);
+    }
+  };
+
   const deleteFile = async (file: KnowledgeFilePayload) => {
     setActionNotice('');
     try {
@@ -933,7 +1095,7 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   const uploadFile = async () => {
     if (!pendingUploadFiles.length || uploadingFiles) return;
     if (duplicateUploadFileNames.length && !window.confirm(
-      `我的资料中已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两个版本，是否继续？`,
+      `我的资料中已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两份独立资料，是否继续？`,
     )) {
       setUploadStatus('已取消上传，请修改文件名或移除同名文件后再试。');
       return;
@@ -2272,9 +2434,9 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
             {isAdmin ? (
               <section className="knowledge-governance-board" aria-label="资料治理看板">
                 <div>
-                  <span className="eyebrow">治理状态</span>
+                  <span className="eyebrow">资料健康度</span>
                   <h3>资料治理看板</h3>
-                  <p>优先处理解析失败、未入检索、待审核和正式资料未启用检索的问题。</p>
+                  <p>优先处理无法读取、未入检索、待审核、重复内容和未启用资料查找的问题。</p>
                 </div>
                 <div className="knowledge-governance-actions">
                   <button
@@ -2317,12 +2479,21 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                   >
                     只看未启用检索 {ragDisabledFiles}
                   </button>
+                  <button
+                    aria-pressed={riskFilter === 'duplicate'}
+                    className={riskFilter === 'duplicate' ? 'is-active' : ''}
+                    onClick={() => setRiskFilter('duplicate')}
+                    type="button"
+                  >
+                    只看重复内容 {duplicateFiles}
+                  </button>
                 </div>
                 <dl>
                   <div><dt>解析失败</dt><dd>{parseFailedFiles}</dd></div>
                   <div><dt>未入检索</dt><dd>{notIndexedFiles}</dd></div>
                   <div><dt>待审核</dt><dd>{pendingReviewFiles}</dd></div>
                   <div><dt>检索未启用</dt><dd>{ragDisabledFiles}</dd></div>
+                  <div><dt>重复内容</dt><dd>{duplicateFiles}</dd></div>
                 </dl>
               </section>
             ) : null}
@@ -2407,6 +2578,10 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
               const canEditMetadata = canEditKnowledgeFileMetadata(file, isAdmin);
               const canRename = canRenameKnowledgeFile(file, isAdmin);
               const isEditingMetadata = metadataEdit?.fileUuid === file.file_uuid;
+              const fileHealth = knowledgeFileHealth(
+                file,
+                Boolean(file.content_sha256 && duplicateContentHashes.has(file.content_sha256)),
+              );
               return (
                 <article
                   aria-label={file.file_name}
@@ -2516,12 +2691,18 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                   ) : null}
                   <div className="knowledge-file-meta">
                     <span>{fileStatusLabel(file)}</span>
+                    <span>v{file.version || 1}</span>
+                    <span>{file.is_current_version === false ? '历史版本' : '当前生效'}</span>
                     <span>{sourceTypeLabel(file.source_type || 'user_upload')}</span>
                     <span>{file.reference_enabled === false ? '暂不参与生成' : '可作为参考资料'}</span>
                     <span>已整理 {file.chunk_count} 个段落</span>
                     {file.rag_enabled ? <span>可查找</span> : null}
                     {file.external_public === true ? <span>允许外部问答</span> : <span>仅内部问答</span>}
                     {file.external_download_allowed === true ? <span>允许外部发送原文件</span> : <span>禁止外发原文件</span>}
+                  </div>
+                  <div className={`knowledge-file-health is-${fileHealth.tone}`}>
+                    <strong>{fileHealth.label}</strong>
+                    <span>{fileHealth.detail}</span>
                   </div>
                   <div className="history-actions knowledge-file-actions" aria-label={`${file.file_name} 操作`}>
                     {isTrashMode ? (
@@ -2592,6 +2773,15 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                                 type="button"
                               >
                                 下载
+                              </button>
+                              <button
+                                aria-label={`版本记录 ${file.file_name}`}
+                                className="knowledge-menu-item"
+                                onClick={() => void openVersionTimeline(file)}
+                                role="menuitem"
+                                type="button"
+                              >
+                                版本记录
                               </button>
                               {canRename ? (
                                 <button
@@ -2946,6 +3136,81 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
                   确认通过
                 </button>
               </div>
+            </section>
+          </div>
+        ) : null}
+        {versionFileName ? (
+          <div className="dialog-backdrop">
+            <section
+              aria-label={`版本记录 ${versionFileName}`}
+              aria-modal="true"
+              className="warning-dialog knowledge-version-dialog"
+              role="dialog"
+            >
+              <header className="knowledge-version-header">
+                <div>
+                  <span className="eyebrow">版本与生效状态</span>
+                  <h2>{versionFileName}</h2>
+                </div>
+                <button
+                  aria-label="关闭版本记录"
+                  className="knowledge-preview-close"
+                  onClick={() => {
+                    setVersionFileName('');
+                    setVersionTimeline(null);
+                    setVersionTimelineNotice('');
+                  }}
+                  type="button"
+                >
+                  ×
+                </button>
+              </header>
+              <p>普通用户可以查看版本变化；管理员可以把历史版本恢复为当前生效版本。</p>
+              {versionTimelineNotice ? <p className="knowledge-version-notice" role="status">{versionTimelineNotice}</p> : null}
+              {versionTimelineLoading && !versionTimeline ? (
+                <p className="knowledge-version-empty" role="status">正在读取版本记录…</p>
+              ) : null}
+              {versionTimeline?.items.length ? (
+                <div className="knowledge-version-list" role="list">
+                  {versionTimeline.items.map((item) => (
+                    <article
+                      className={`knowledge-version-item${item.is_current_version ? ' is-current' : ''}`}
+                      key={item.file_uuid}
+                      role="listitem"
+                    >
+                      <div className="knowledge-version-item-heading">
+                        <div>
+                          <strong>v{item.version} · {item.file_name}</strong>
+                          <small>{knowledgeVersionTimeLabel(item.updated_at || item.created_at)}</small>
+                        </div>
+                        {item.is_current_version ? <span>当前生效</span> : <span>历史版本</span>}
+                      </div>
+                      <p>
+                        {item.status === 'READY' ? '处理完成' : item.status}
+                        {' · '}
+                        {item.rag_enabled ? '参与资料查找' : '不参与资料查找'}
+                        {' · '}
+                        审核状态：{item.review_status}
+                      </p>
+                      {item.summary ? <p>{item.summary}</p> : null}
+                      {isAdmin && !item.is_current_version ? (
+                        <button
+                          aria-label={`设为当前版本 ${item.file_name} v${item.version}`}
+                          className="knowledge-button knowledge-button-secondary"
+                          disabled={versionTimelineLoading}
+                          onClick={() => void activateVersion(item.file_uuid)}
+                          type="button"
+                        >
+                          设为当前版本
+                        </button>
+                      ) : null}
+                    </article>
+                  ))}
+                </div>
+              ) : null}
+              {!versionTimelineLoading && versionTimeline && !versionTimeline.items.length ? (
+                <p className="knowledge-version-empty">暂无版本记录。</p>
+              ) : null}
             </section>
           </div>
         ) : null}

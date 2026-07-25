@@ -261,6 +261,7 @@ textarea:focus-visible {
 }
 
 .sidebar nav button {
+  position: relative;
   width: 100%;
   padding: 10px 12px;
   display: flex;
@@ -291,6 +292,41 @@ textarea:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.nav-task-badge {
+  align-items: center;
+  background: var(--accent);
+  border: 2px solid var(--sidebar);
+  border-radius: 999px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 700;
+  height: 20px;
+  justify-content: center;
+  line-height: 1;
+  margin-left: auto;
+  min-width: 20px;
+  padding: 0 5px;
+}
+
+.nav-task-badge.is-active {
+  background: var(--accent);
+}
+
+.nav-task-badge.is-attention {
+  background: var(--warning);
+}
+
+.sidebar-collapsed .nav-task-badge {
+  height: 16px;
+  margin: 0;
+  min-width: 16px;
+  padding: 0 3px;
+  position: absolute;
+  right: 3px;
+  top: 2px;
 }
 
 .sidebar-collapsed .sidebar {
@@ -3344,7 +3380,7 @@ textarea:focus-visible {
 .knowledge-governance-board dl {
   margin: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(96px, 1fr));
+  grid-template-columns: repeat(5, minmax(96px, 1fr));
   gap: 8px;
 }
 
@@ -3582,6 +3618,56 @@ textarea:focus-visible {
 .knowledge-file-meta span:last-child {
   color: #1d4ed8;
   background: rgb(59 130 246 / 10%);
+}
+
+.knowledge-file-health {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  background: var(--surface-elevated);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.knowledge-file-health strong {
+  flex: 0 0 auto;
+  color: var(--text-primary);
+}
+
+.knowledge-file-health.is-healthy {
+  border-color: rgb(16 185 129 / 24%);
+  background: rgb(16 185 129 / 7%);
+}
+
+.knowledge-file-health.is-healthy strong {
+  color: #047857;
+}
+
+.knowledge-file-health.is-attention {
+  border-color: rgb(245 158 11 / 28%);
+  background: rgb(245 158 11 / 8%);
+}
+
+.knowledge-file-health.is-attention strong {
+  color: #b45309;
+}
+
+.knowledge-file-health.is-blocked {
+  border-color: rgb(239 68 68 / 25%);
+  background: rgb(239 68 68 / 7%);
+}
+
+.knowledge-file-health.is-blocked strong {
+  color: #b91c1c;
+}
+
+.knowledge-file-health.is-inactive {
+  background: color-mix(in srgb, var(--background) 74%, var(--surface));
 }
 
 .knowledge-document-area .knowledge-file-actions,
@@ -3992,6 +4078,86 @@ textarea:focus-visible {
   color: var(--text-secondary);
 }
 
+.knowledge-version-dialog {
+  width: min(680px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+}
+
+.knowledge-version-header,
+.knowledge-version-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.knowledge-version-header h2 {
+  margin: 5px 0 0;
+}
+
+.knowledge-version-list {
+  margin-top: 18px;
+  display: grid;
+  gap: 10px;
+}
+
+.knowledge-version-item {
+  padding: 14px;
+  display: grid;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--background);
+}
+
+.knowledge-version-item.is-current {
+  border-color: color-mix(in srgb, var(--accent) 52%, var(--border));
+  background: color-mix(in srgb, var(--accent) 7%, var(--background));
+}
+
+.knowledge-version-item-heading > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.knowledge-version-item-heading strong {
+  overflow-wrap: anywhere;
+}
+
+.knowledge-version-item-heading small,
+.knowledge-version-item > p,
+.knowledge-version-empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.knowledge-version-item-heading > span {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: var(--surface-solid);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.knowledge-version-item.is-current .knowledge-version-item-heading > span {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-solid));
+  color: var(--accent);
+}
+
+.knowledge-version-item > button {
+  justify-self: start;
+}
+
+.knowledge-version-notice,
+.knowledge-version-empty {
+  margin-top: 14px !important;
+}
+
 .dialog-actions {
   margin-top: 22px;
   display: flex;
@@ -4270,6 +4436,15 @@ textarea:focus-visible {
   .knowledge-document-area .knowledge-file-card,
   .knowledge-file-question-actions {
     grid-template-columns: 1fr;
+  }
+
+  .knowledge-governance-board dl {
+    grid-template-columns: repeat(2, minmax(96px, 1fr));
+  }
+
+  .knowledge-file-health {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .knowledge-document-area .knowledge-file-actions {
@@ -4948,6 +5123,26 @@ textarea:focus-visible {
 
 .skill-card .history-actions {
   margin-top: auto;
+}
+
+.skill-input-upload {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  color: var(--text-primary);
+  background: var(--surface-muted);
+  cursor: pointer;
+}
+
+.skill-input-upload:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.skill-input-upload small {
+  color: var(--text-secondary);
 }
 
 .skill-card .primary-action {
@@ -5860,7 +6055,7 @@ textarea:focus-visible {
   z-index: 40;
 }
 
-.chat-long-task-notice {
+.background-task-notice {
   align-items: center;
   background: var(--surface-elevated);
   border: 1px solid var(--border-subtle);
@@ -5875,18 +6070,22 @@ textarea:focus-visible {
   z-index: 41;
 }
 
-.chat-long-task-notice > div {
+.background-task-notice.is-attention {
+  border-color: color-mix(in srgb, var(--warning) 40%, var(--border));
+}
+
+.background-task-notice > div {
   display: grid;
   flex: 1;
   gap: 3px;
   min-width: 0;
 }
 
-.chat-long-task-notice strong {
+.background-task-notice strong {
   font-size: 13px;
 }
 
-.chat-long-task-notice span {
+.background-task-notice span {
   color: var(--text-secondary);
   font-size: 12px;
   overflow: hidden;
@@ -5894,16 +6093,16 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.chat-long-task-notice button {
+.background-task-notice button {
   background: transparent;
   border: 0;
-  color: var(--accent-primary);
+  color: var(--accent);
   cursor: pointer;
   flex: 0 0 auto;
 }
 
-.chat-long-task-notice .chat-long-task-notice-close {
-  color: var(--text-tertiary);
+.background-task-notice .background-task-notice-close {
+  color: var(--text-secondary);
   font-size: 18px;
   padding: 0;
 }
@@ -6416,6 +6615,25 @@ textarea:focus-visible {
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-sessions .chat-session-load-more {
+  width: calc(100% - 32px);
+  min-height: 36px;
+  padding: 8px 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--border);
+  background: var(--surface-elevated);
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-align: center;
+}
+
+.chat-sessions .chat-session-load-more:disabled {
+  cursor: wait;
+  opacity: .6;
 }
 
 .chat-sidebar-status {
@@ -9179,6 +9397,91 @@ textarea:focus-visible {
   line-height: 1.55;
 }
 
+.workflow-schedule-panel {
+  background: color-mix(in srgb, var(--accent-soft) 26%, var(--surface-solid));
+}
+
+.workflow-schedule-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-solid);
+  font-size: 12px;
+}
+
+.workflow-schedule-preview strong {
+  color: var(--text-primary);
+}
+
+.workflow-schedule-preview span {
+  color: var(--text-secondary);
+}
+
+.workflow-schedule-preview.is-valid {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+}
+
+.workflow-schedule-preview.is-invalid {
+  border-color: color-mix(in srgb, var(--warning) 52%, var(--border));
+}
+
+.workflow-schedule-actions,
+.workflow-schedule-list-heading,
+.workflow-schedule-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.workflow-schedule-actions {
+  margin-top: 12px;
+}
+
+.workflow-schedule-actions small {
+  color: var(--text-secondary);
+}
+
+.workflow-schedule-list {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+
+.workflow-schedule-list-heading {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.workflow-schedule-list-heading span,
+.workflow-schedule-item span,
+.workflow-schedule-empty {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.workflow-schedule-item {
+  padding: 10px 0;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.workflow-schedule-item > div {
+  display: grid;
+  gap: 4px;
+}
+
+.workflow-schedule-item strong {
+  font-size: 12px;
+}
+
+.workflow-schedule-empty {
+  margin: 10px 0 0;
+}
+
 .workflow-builder {
   margin-bottom: 4px;
   padding: 20px;
@@ -10343,6 +10646,58 @@ textarea:focus-visible {
 
 .enterprise-management-state h2 { margin: 14px 0 0; }
 .enterprise-management-state p { margin: 0; color: var(--text-secondary); }
+
+.chat-research-plan {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+}
+
+.chat-research-plan summary {
+  color: var(--text-primary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.chat-research-plan > p {
+  margin: 10px 0;
+  color: var(--text-secondary);
+}
+
+.chat-research-plan ol {
+  margin: 0;
+  padding-left: 20px;
+  color: var(--text-primary);
+}
+
+.chat-research-plan li + li {
+  margin-top: 6px;
+}
+
+.chat-research-plan dl {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.chat-research-plan dl > div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.chat-research-plan dt {
+  color: var(--text-muted);
+}
+
+.chat-research-plan dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
 
 @media (max-width: 900px) {
   .enterprise-management-header { align-items: flex-start; flex-direction: column; }

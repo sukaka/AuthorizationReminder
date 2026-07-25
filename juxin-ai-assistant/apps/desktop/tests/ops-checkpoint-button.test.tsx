@@ -197,6 +197,35 @@ it('saves WeCom channel switches independently without rendering credentials', a
   expect(wecomKf).toBeChecked();
 });
 
+it('blocks an unconfigured WeCom channel and explains the server-side fix', async () => {
+  mockOpsApis();
+  server.use(
+    http.get('/api/ai/ops/feature-flags', () =>
+      HttpResponse.json({
+        rollout_percent: 20,
+        learning_auto_publish: false,
+        channels: { web: true, desktop: true, feishu: false, wecom: false, wecom_kf: false },
+        channel_configuration: {
+          wecom: {
+            configured: false,
+            missing: ['WECOM_CORP_ID', 'WECOM_AGENT_SECRET'],
+          },
+          wecom_kf: { configured: true, missing: [] },
+        },
+      }),
+    ),
+  );
+
+  render(<OpsDashboardPage />);
+
+  const wecom = await screen.findByRole('switch', { name: '企业微信' });
+  expect(wecom).toBeDisabled();
+  expect(screen.getByText(/待补环境变量：WECOM_CORP_ID、WECOM_AGENT_SECRET/)).toBeInTheDocument();
+  expect(screen.getByText(/服务器的 .env/)).toBeInTheDocument();
+  expect(screen.getAllByText(/重启 API/)).not.toHaveLength(0);
+  expect(screen.queryByRole('textbox', { name: /secret|token|加密密钥/i })).not.toBeInTheDocument();
+});
+
 it('allows an administrator to inspect and control one run by id', async () => {
   mockOpsApis();
   const pause = vi.fn();

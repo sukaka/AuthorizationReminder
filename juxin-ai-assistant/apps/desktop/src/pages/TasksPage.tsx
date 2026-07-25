@@ -7,6 +7,7 @@ import {
   getAgentRunDetail,
   listAgentRuns,
   postAgentRunFeedback,
+  retryAgentRun,
   type AgentRunDetailPayload,
   type AgentRunPayload,
 } from '../api/client';
@@ -17,6 +18,7 @@ const STATUS_LABEL: Record<string, string> = {
   created: '已创建',
   queued: '排队中',
   running: '执行中',
+  waiting_user: '待补充',
   waiting_confirmation: '待确认',
   paused: '已暂停',
   retrying: '重试中',
@@ -26,10 +28,30 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: '已取消',
 };
 
+const STAGE_LABEL: Record<string, string> = {
+  created: '准备任务',
+  queued: '等待执行',
+  planning: '制定计划',
+  routing: '选择合适助手',
+  invoking: '调用能力',
+  researching: '查找资料',
+  generating: '生成内容',
+  validating: '检查结果',
+  persisting: '保存成果',
+  completed: '已完成',
+  failed: '执行失败',
+  cancelled: '已取消',
+};
+
+function stageLabel(stage?: string | null): string {
+  if (!stage) return '处理中';
+  return STAGE_LABEL[stage] || '处理中';
+}
+
 type TasksPageProps = {
   initialRunId?: string;
   onOpenArtifact?: (artifactId: string) => void;
-  onOpenChat?: () => void;
+  onOpenChat?: (conversationId?: string) => void;
   onOpenWorkflow?: (workflowId: string) => void;
 };
 
@@ -47,9 +69,11 @@ export function TasksPage({
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
 
-  const openDetail = useCallback(async (runId: string) => {
+  const openDetail = useCallback(async (runId: string, preserveNotice = false) => {
     setError('');
-    setNotice('');
+    if (!preserveNotice) {
+      setNotice('');
+    }
     try {
       setDetail(await getAgentRunDetail(runId));
     } catch (err) {
@@ -91,7 +115,7 @@ export function TasksPage({
       setNotice('任务已提交');
       await refresh();
       if (created.run?.run_id) {
-        await openDetail(created.run.run_id);
+        await openDetail(created.run.run_id, true);
       }
     } catch (err) {
       setError(err instanceof ApiError ? err.code : '创建任务失败');
@@ -103,10 +127,23 @@ export function TasksPage({
     try {
       await cancelAgentRun(detail.run.run_id);
       setNotice('已请求取消');
-      await openDetail(detail.run.run_id);
+      await openDetail(detail.run.run_id, true);
       await refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.code : '取消失败');
+    }
+  };
+
+  const onRetry = async () => {
+    if (!detail?.run?.run_id) return;
+    setError('');
+    try {
+      await retryAgentRun(detail.run.run_id);
+      setNotice('任务已重新进入处理队列');
+      await openDetail(detail.run.run_id, true);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : '重试失败');
     }
   };
 
@@ -130,14 +167,15 @@ export function TasksPage({
   const answerText = extractAnswer(detail);
   const citations = extractCitations(detail);
   const quality = extractQuality(detail);
+  const artifactId = extractArtifactId(detail);
 
   return (
     <section className="history-page">
       <header className="catalog-heading">
         <div>
-          <span className="eyebrow">6.0 任务工作台</span>
+          <span className="eyebrow">后台任务</span>
           <h1>任务中心</h1>
-          <p>查看后台任务进度、步骤、引用与交付结果。产品中的「任务」对应系统 Run。</p>
+          <p>查看后台任务进度、执行步骤、引用来源与交付结果。</p>
         </div>
         <div className="history-filters">
           <select
@@ -147,6 +185,7 @@ export function TasksPage({
           >
             <option value="">全部状态</option>
             <option value="running">执行中</option>
+            <option value="waiting_user">待补充</option>
             <option value="succeeded">已完成</option>
             <option value="failed">失败</option>
             <option value="cancelled">已取消</option>
@@ -190,9 +229,9 @@ export function TasksPage({
               onClick={() => void openDetail(item.run_id)}
             >
               <span>
-                <strong>{item.title || item.run_id.slice(0, 8)}</strong>
+                <strong>{item.title || '未命名任务'}</strong>
                 <small>
-                  {STATUS_LABEL[item.status] || item.status} · {item.stage || '—'}
+                  {STATUS_LABEL[item.status] || '处理中'} · {stageLabel(item.stage)}
                 </small>
               </span>
               <span>
@@ -215,13 +254,25 @@ export function TasksPage({
                 <span>{detail.run.progress ?? 0}%</span>
               </header>
               <p style={{ fontSize: 13, opacity: 0.8 }}>
-                阶段：{detail.run.stage || '—'} · 类型 {detail.run.run_type || '—'} · ID{' '}
-                {detail.run.run_id.slice(0, 8)}
+                阶段：{stageLabel(detail.run.stage)} · 进度：{detail.run.progress ?? 0}%
               </p>
+              {detail.run.next_action ? (
+                <p className="form-success" role="status">
+                  下一步：{detail.run.next_action}
+                </p>
+              ) : null}
+              {detail.run.error_message ? (
+                <p className="form-error" role="alert">
+                  {detail.run.error_message}
+                  {detail.run.error_code ? `（${detail.run.error_code}）` : ''}
+                </p>
+              ) : null}
               {workflowMeta(detail) ? (
                 <p style={{ fontSize: 13 }}>
-                  工作流：<code>{workflowMeta(detail)?.workflow_id}</code>
-                  {workflowMeta(detail)?.status ? ` · ${workflowMeta(detail)?.status}` : ''}
+                  已关联工作流
+                  {workflowMeta(detail)?.status
+                    ? ` · ${STATUS_LABEL[String(workflowMeta(detail)?.status)] || '处理中'}`
+                    : ''}
                   {workflowMeta(detail)?.workflow_id && onOpenWorkflow ? (
                     <>
                       {' '}
@@ -238,7 +289,7 @@ export function TasksPage({
               ) : null}
               {routingSelected(detail) ? (
                 <p style={{ fontSize: 13 }}>
-                  路由选中：<code>{routingSelected(detail)}</code>
+                  系统已自动选择合适助手
                 </p>
               ) : null}
 
@@ -295,9 +346,15 @@ export function TasksPage({
               ) : null}
 
               <div className="history-actions" style={{ flexWrap: 'wrap' }}>
-                {['running', 'queued', 'created', 'retrying'].includes(detail.run.status) ? (
+                {(detail.run.cancel_allowed
+                  ?? ['running', 'queued', 'created', 'retrying'].includes(detail.run.status)) ? (
                   <button type="button" className="secondary-action" onClick={() => void onCancel()}>
                     取消任务
+                  </button>
+                ) : null}
+                {detail.run.retry_allowed ? (
+                  <button type="button" className="primary-action" onClick={() => void onRetry()}>
+                    重新运行
                   </button>
                 ) : null}
                 <button type="button" className="secondary-action" onClick={() => void onFeedback('useful')}>
@@ -310,18 +367,22 @@ export function TasksPage({
                 >
                   需要改进
                 </button>
-                {detail.run.artifact && typeof detail.run.artifact.artifact_id === 'string' && onOpenArtifact ? (
+                {artifactId && onOpenArtifact ? (
                   <button
                     type="button"
                     className="secondary-action"
-                    onClick={() => onOpenArtifact(String(detail.run.artifact?.artifact_id))}
+                    onClick={() => onOpenArtifact(artifactId)}
                   >
                     打开成果
                   </button>
                 ) : null}
                 {onOpenChat ? (
-                  <button type="button" className="secondary-action" onClick={() => onOpenChat()}>
-                    返回聊天
+                  <button
+                    type="button"
+                    className="secondary-action"
+                    onClick={() => onOpenChat(detail.run.conversation_id || undefined)}
+                  >
+                    {detail.run.conversation_id ? '打开原会话' : '返回聊天'}
                   </button>
                 ) : null}
                 <button type="button" className="secondary-action" onClick={() => void openDetail(detail.run.run_id)}>
@@ -369,6 +430,13 @@ function routingSelected(detail: AgentRunDetailPayload | null): string {
     if (id) return String(id);
   }
   return '';
+}
+
+function extractArtifactId(detail: AgentRunDetailPayload | null): string {
+  const runArtifactId = detail?.run?.artifact?.artifact_id;
+  if (typeof runArtifactId === 'string' && runArtifactId) return runArtifactId;
+  const resultArtifactId = detail?.result?.artifact_id;
+  return typeof resultArtifactId === 'string' ? resultArtifactId : '';
 }
 
 function extractAnswer(detail: AgentRunDetailPayload | null): string {

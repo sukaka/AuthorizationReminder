@@ -79,6 +79,7 @@ it('updates and removes project members from the permission panel', async () => 
   ];
   server.use(
     http.get(`/api/ai/projects/${projectUuid}/members`, () => HttpResponse.json(members)),
+    http.get(`/api/ai/projects/${projectUuid}/member-candidates`, () => HttpResponse.json([])),
     http.patch(`/api/ai/projects/${projectUuid}/members/member-alice`, async ({ request }) => {
       updateMember(await request.json());
       return HttpResponse.json({ ...members[1], role: 'reviewer' });
@@ -109,6 +110,54 @@ it('links project resources and copies a project artifact to personal space', as
     http.get(`/api/ai/projects/${projectUuid}/artifacts`, () => HttpResponse.json([{
       artifact_uuid: 'artifact-1', project_artifact_uuid: 'project-artifact-1', title: '项目报告', artifact_type: 'word_document', content_summary: '报告摘要', file_name: 'report.docx', status: 'active', linked_by: 'u-owner', created_at: '2026-07-13T00:00:00Z',
     }])),
+    http.get('/api/knowledge/files', () => HttpResponse.json({
+      items: [{
+        file_uuid: 'file-1',
+        file_name: '方案.docx',
+        file_type: 'docx',
+        file_size: 1024,
+        visibility: 'private',
+        status: 'READY',
+        chunk_count: 3,
+        created_at: '2026-07-13T00:00:00Z',
+        category: '个人资料',
+        usage_type: 'personal_reference',
+      }],
+      total: 1,
+    })),
+    http.get('/api/ai/work-artifacts', () => HttpResponse.json({
+      items: [{
+        artifact_uuid: 'artifact-2',
+        conversation_id: 'conversation-1',
+        message_id: 'message-1',
+        title: '新增成果',
+        artifact_type: 'ordinary_answer',
+        source_scope: 'personal',
+        source_summary: [],
+        content_summary: '新增成果摘要',
+        file_name: '',
+        version: 1,
+        status: 'active',
+        created_at: '2026-07-13T00:00:00Z',
+        updated_at: '2026-07-13T00:00:00Z',
+      }],
+      total: 1,
+      page: 1,
+      page_size: 100,
+    })),
+    http.get('/api/conversations', () => HttpResponse.json({
+      items: [{
+        session_uuid: 'session-1',
+        title: '个人方案讨论',
+        mode: 'normal',
+        status: 'active',
+        workspace_type: 'personal',
+        project_uuid: null,
+        created_at: '2026-07-13T00:00:00Z',
+        updated_at: '2026-07-14T00:00:00Z',
+      }],
+      total: 1,
+    })),
     http.post(`/api/ai/projects/${projectUuid}/files/file-1`, () => {
       linkFile();
       return HttpResponse.json({ file_uuid: 'file-1', project_file_uuid: 'project-file-1', file_name: '方案.docx', file_type: 'docx', category: '项目资料', summary: '', status: 'active', linked_by: 'u-owner', created_at: '2026-07-14T00:00:00Z' });
@@ -126,13 +175,47 @@ it('links project resources and copies a project artifact to personal space', as
   render(<ProjectWorkspaceExtendedPanel activeTab="knowledge" projectUuid={projectUuid} />);
 
   expect(await screen.findByRole('heading', { name: '资料与知识' })).toBeInTheDocument();
-  await userEvent.type(screen.getByRole('textbox', { name: '知识文件 UUID' }), 'file-1');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: '选择个人资料' }), 'file-1');
   await userEvent.click(screen.getByRole('button', { name: '关联文件' }));
   await waitFor(() => expect(linkFile).toHaveBeenCalledTimes(1));
 
-  await userEvent.type(screen.getByRole('textbox', { name: '成果 UUID' }), 'artifact-2');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: '选择个人成果' }), 'artifact-2');
   await userEvent.click(screen.getByRole('button', { name: '关联成果' }));
   await waitFor(() => expect(linkArtifact).toHaveBeenCalledTimes(1));
   await userEvent.click(screen.getByRole('button', { name: '复制成果到个人 项目报告' }));
   await waitFor(() => expect(copyArtifact).toHaveBeenCalledWith({ sanitized_title: '项目报告（个人副本）', sanitized_content_summary: '报告摘要' }));
+});
+
+it('adds a project member from the enterprise user directory', async () => {
+  const addMember = vi.fn();
+  server.use(
+    http.get(`/api/ai/projects/${projectUuid}/members`, () => HttpResponse.json([])),
+    http.get(`/api/ai/projects/${projectUuid}/member-candidates`, () => HttpResponse.json([{
+      user_id: '23',
+      username: '李雷',
+      role: 'user',
+      department_code: '销售部',
+    }])),
+    http.post(`/api/ai/projects/${projectUuid}/members`, async ({ request }) => {
+      addMember(await request.json());
+      return HttpResponse.json({
+        member_uuid: 'member-lilei',
+        user_id: '23',
+        role: 'reviewer',
+        status: 'active',
+        invited_by: 'u-owner',
+        created_at: '2026-07-14T00:00:00Z',
+      }, { status: 201 });
+    }),
+  );
+
+  render(<ProjectWorkspaceExtendedPanel activeTab="members" projectUuid={projectUuid} />);
+
+  expect(await screen.findByRole('option', { name: '李雷 · 销售部 · user' })).toBeInTheDocument();
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: '选择企业用户' }), '23');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: '新成员角色' }), 'reviewer');
+  await userEvent.click(screen.getByRole('button', { name: '添加成员' }));
+
+  await waitFor(() => expect(addMember).toHaveBeenCalledWith({ user_id: '23', role: 'reviewer' }));
+  expect(await screen.findByText('23')).toBeInTheDocument();
 });

@@ -35,10 +35,41 @@ const skill = {
 };
 
 it('shows published skills as a user-facing capability center and runs a skill', async () => {
+  const uploadRequest = vi.fn();
   const runRequest = vi.fn();
+  const appendedFields = new Map<string, string>();
+  const originalAppend = FormData.prototype.append;
+  const appendSpy = vi.spyOn(FormData.prototype, 'append').mockImplementation(function append(
+    this: FormData,
+    name: string,
+    value: string | Blob,
+  ) {
+    if (typeof value === 'string') {
+      appendedFields.set(name, value);
+    } else if (value instanceof File) {
+      appendedFields.set('file_name', value.name);
+    }
+    return (originalAppend as (this: FormData, name: string, value: string | Blob) => void)
+      .call(this, name, value);
+  });
   server.use(
     http.get('/api/skills', () => HttpResponse.json({ items: [skill], total: 1 })),
+    http.get('/api/skills/mine', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/skills/runs', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/knowledge/files/upload', () => {
+      uploadRequest();
+      return HttpResponse.json({
+        file_uuid: 'skill-input-file-1',
+        file_name: '风险评估.docx',
+        file_type: 'docx',
+        file_size: 12,
+        visibility: 'PRIVATE',
+        status: 'READY',
+        chunk_count: 1,
+        created_at: '2026-07-26T00:00:00',
+        usage_type: 'skill_input',
+      }, { status: 201 });
+    }),
     http.post('/api/skills/risk-assessment-review/run', async ({ request }) => {
       runRequest(await request.json());
       return HttpResponse.json({
@@ -48,7 +79,20 @@ it('shows published skills as a user-facing capability center and runs a skill',
         status: 'completed',
         tools_used: ['personal_memory'],
         result: { summary: '已完成风险评估过程文档审查：输出不符合项、证据缺口、修改建议。' },
-        artifacts: [{ kind: 'markdown', title: '风险评估过程文档审查', content: '不符合项' }],
+        artifacts: [{
+          artifact_id: 'run-1-1',
+          artifact_type: 'markdown',
+          kind: 'markdown',
+          title: '风险评估过程文档审查',
+          status: 'ready',
+          version: 1,
+          format: 'markdown',
+          mime_type: 'text/markdown',
+          download_ref: '',
+          downloadable: false,
+          editable: true,
+          content: '不符合项',
+        }],
       });
     }),
   );
@@ -62,15 +106,58 @@ it('shows published skills as a user-facing capability center and runs a skill',
   expect(screen.getByText('markdown、docx')).toBeInTheDocument();
   expect(screen.queryByText(/ToolRegistry|embedding|namespace|RAG/)).not.toBeInTheDocument();
 
+  await userEvent.upload(
+    screen.getByLabelText('上传风险评估过程文档审查材料'),
+    new File(['test content'], '风险评估.docx', {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    }),
+  );
   await userEvent.click(screen.getByRole('button', { name: '开始使用 风险评估过程文档审查' }));
+  await waitFor(() => expect(uploadRequest).toHaveBeenCalled());
+  expect(Object.fromEntries(appendedFields)).toMatchObject({
+    file_name: '风险评估.docx',
+    usage_type: 'skill_input',
+    rag_scope: 'none',
+    reference_enabled: 'false',
+  });
   await waitFor(() => expect(runRequest).toHaveBeenCalledWith({
     task_id: 'skill-risk-assessment-review',
     input: {
       question: '请执行风险评估过程文档审查',
-      attachments: [{ name: '待处理材料.docx', file_type: 'docx' }],
+      attachments: [{
+        file_uuid: 'skill-input-file-1',
+        name: '风险评估.docx',
+        file_type: 'docx',
+        file_size: 12,
+      }],
     },
   }));
   expect(await screen.findByText(/已完成风险评估过程文档审查/)).toBeInTheDocument();
+  expect(screen.getByText('MARKDOWN · 可编辑')).toBeInTheDocument();
+  appendSpy.mockRestore();
+});
+
+it('requires users to choose a real attachment before running an attachment skill', async () => {
+  const runRequest = vi.fn();
+  server.use(
+    http.get('/api/skills', () => HttpResponse.json({ items: [skill], total: 1 })),
+    http.get('/api/skills/mine', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/skills/runs', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/skills/risk-assessment-review/run', () => {
+      runRequest();
+      return HttpResponse.json({});
+    }),
+  );
+
+  render(<SkillsPage />);
+
+  await screen.findByRole('heading', { name: '能力中心' });
+  await userEvent.click(screen.getByRole('button', { name: '开始使用 风险评估过程文档审查' }));
+
+  expect(await screen.findByRole('status')).toHaveTextContent(
+    '请先为“风险评估过程文档审查”选择处理材料。',
+  );
+  expect(runRequest).not.toHaveBeenCalled();
 });
 
 it('shows admin skill governance with ids, versions, tools and review actions', async () => {
@@ -125,6 +212,7 @@ it('adds the capability center to the main navigation for ordinary users', async
       favorites: [], recent_tasks: [], recent_generations: [], safety_reminders: [],
     })),
     http.get('/api/skills', () => HttpResponse.json({ items: [skill], total: 1 })),
+    http.get('/api/skills/mine', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/skills/runs', () => HttpResponse.json({ items: [], total: 0 })),
   );
 

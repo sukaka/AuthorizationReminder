@@ -68,7 +68,8 @@ describe('ChatRunContext', () => {
       />,
     );
 
-    expect(screen.getByText('Run run-2026')).toBeInTheDocument();
+    expect(screen.getByText('任务详情')).toBeInTheDocument();
+    expect(screen.queryByText(/run-2026|session-123456/i)).not.toBeInTheDocument();
     expect(screen.getByText('运行中')).toBeInTheDocument();
     expect(screen.getByText(taskProgress.goal)).toBeInTheDocument();
     expect(screen.getByText('整理依据')).toBeInTheDocument();
@@ -104,18 +105,20 @@ describe('ChatRunContext', () => {
 
     expect(onStop).not.toHaveBeenCalled();
     expect(onOpenTaskCenter).not.toHaveBeenCalled();
-    await user.click(screen.getByRole('button', { name: '停止 Run' }));
+    await user.click(screen.getByRole('button', { name: '停止任务' }));
     await user.click(screen.getByRole('button', { name: '打开任务中心' }));
     expect(onStop).toHaveBeenCalledTimes(1);
     expect(onOpenTaskCenter).toHaveBeenCalledWith('run-20260718-abc123');
   });
 
-  it('shows retry only for a failed run that allows recovery', async () => {
+  it('shows explicit recovery actions for a failed task', async () => {
     const user = userEvent.setup();
     const onRetry = vi.fn();
+    const onContinueWithoutTools = vi.fn();
     render(
       <ChatRunContext
         messages={[]}
+        onContinueWithoutTools={onContinueWithoutTools}
         onRetry={onRetry}
         status="idle"
         taskProgress={{
@@ -132,5 +135,7 @@ describe('ChatRunContext', () => {
     expect(retry).toBeInTheDocument();
     await user.click(retry);
     expect(onRetry).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button', { name: '继续普通回答' }));
+    expect(onContinueWithoutTools).toHaveBeenCalledTimes(1);
   });
 });

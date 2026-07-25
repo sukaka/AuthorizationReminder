@@ -41,13 +41,21 @@ class DashiPptArtifact:
     mime_type: str
 
     def as_dict(self, *, run_id: str) -> dict[str, Any]:
+        download_url = f"/api/skills/dashi-ppt/runs/{run_id}/download/{self.format}"
         return {
+            "artifact_id": f"{run_id}-{self.format}",
+            "artifact_type": self.format,
             "kind": self.format,
             "title": self.file_name,
+            "status": "ready",
+            "version": 1,
             "file_name": self.file_name,
             "format": self.format,
             "mime_type": self.mime_type,
-            "download_url": f"/api/skills/dashi-ppt/runs/{run_id}/download/{self.format}",
+            "download_url": download_url,
+            "download_ref": download_url,
+            "downloadable": True,
+            "editable": self.format in {"pptx", "html"},
             "content": "已生成真实文件，可下载。",
         }
 

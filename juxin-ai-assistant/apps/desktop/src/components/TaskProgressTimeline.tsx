@@ -12,6 +12,7 @@ type TaskProgressTimelineProps = {
   selectedSources?: Array<Record<string, unknown>>;
   toolCalls?: Array<Record<string, unknown>>;
   onRetry?: () => void;
+  onContinueWithoutTools?: () => void;
   onSaveToMyMaterials?: () => void;
   onSubmitCompanyReview?: () => void;
 };
@@ -77,6 +78,7 @@ export function TaskProgressTimeline({
   selectedSources = [],
   toolCalls = [],
   onRetry,
+  onContinueWithoutTools,
   onSaveToMyMaterials,
   onSubmitCompanyReview,
 }: TaskProgressTimelineProps) {
@@ -123,8 +125,10 @@ export function TaskProgressTimeline({
               {toolLabel(tool.tool_name)}未完成
             </span>
           ))}
-          <button onClick={onRetry} type="button">可重试</button>
-          <button type="button">继续普通回答</button>
+          {onRetry ? <button onClick={onRetry} type="button">可重试</button> : null}
+          {onContinueWithoutTools ? (
+            <button onClick={onContinueWithoutTools} type="button">继续普通回答</button>
+          ) : null}
         </div>
       ) : null}
 

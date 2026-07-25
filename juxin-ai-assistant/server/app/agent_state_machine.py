@@ -10,14 +10,17 @@ class InvalidRunTransition(ValueError):
 class AgentRunStateMachine:
     _KNOWN = frozenset(
         {
-            "created", "queued", "running", "waiting_confirmation", "paused",
+            "created", "queued", "running", "waiting_user", "waiting_confirmation", "paused",
             "retrying", "succeeded", "completed", "failed", "cancelled",
         }
     )
     _ALLOWED = {
         "created": frozenset({"queued", "running", "succeeded", "failed", "cancelled"}),
         "queued": frozenset({"running", "cancelled", "failed"}),
-        "running": frozenset({"waiting_confirmation", "paused", "succeeded", "completed", "failed", "cancelled"}),
+        "running": frozenset(
+            {"waiting_user", "waiting_confirmation", "paused", "succeeded", "completed", "failed", "cancelled"}
+        ),
+        "waiting_user": frozenset({"running", "paused", "failed", "cancelled"}),
         "waiting_confirmation": frozenset({"running", "paused", "failed", "cancelled"}),
         "paused": frozenset({"running", "failed", "cancelled"}),
         "retrying": frozenset({"running", "failed", "cancelled"}),

@@ -2,15 +2,19 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import {
   ApiError,
+  createWorkflowSchedule,
   deleteCustomWorkflow,
   getWorkflowDefinition,
+  listWorkflowSchedules,
   listWorkflows,
   publishCustomWorkflow,
   routeAgent,
   runWorkflow,
   saveCustomWorkflow,
+  setWorkflowScheduleEnabled,
   validateSavedWorkflow,
   validateWorkflow,
+  type WorkflowSchedulePayload,
 } from '../api/client';
 
 type WorkflowItem = {
@@ -69,6 +73,79 @@ const STEP_TYPES = [
 ];
 
 const emptyParamsJson = '{}';
+
+type ParsedSchedule = {
+  cronExpression: string;
+  label: string;
+};
+
+function parseScheduleText(value: string): ParsedSchedule | null {
+  const text = value.trim().replace(/\s+/g, '');
+  if (!text) return null;
+
+  const minuteInterval = text.match(/每(?:隔)?(\d{1,2})分钟/);
+  if (minuteInterval) {
+    const minutes = Number(minuteInterval[1]);
+    if (minutes >= 1 && minutes <= 59) {
+      return { cronExpression: `*/${minutes} * * * *`, label: `每 ${minutes} 分钟` };
+    }
+    return null;
+  }
+  if (/每小时/.test(text)) {
+    return { cronExpression: '0 * * * *', label: '每小时整点' };
+  }
+
+  const timeMatch = text.match(/(凌晨|上午|中午|下午|晚上)?(\d{1,2})(?:[:：点时](\d{1,2}))?分?/);
+  if (!timeMatch) return null;
+  const period = timeMatch[1] || '';
+  let hour = Number(timeMatch[2]);
+  const minute = Number(timeMatch[3] || 0);
+  if (hour > 23 || minute > 59) return null;
+  if (period) {
+    if (hour > 12) return null;
+    if ((period === '下午' || period === '晚上') && hour < 12) hour += 12;
+    if (period === '凌晨' && hour === 12) hour = 0;
+    if (period === '上午' && hour === 12) hour = 0;
+  }
+  const displayTime = `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+
+  if (/(?:每个)?工作日|周一至周五/.test(text)) {
+    return { cronExpression: `${minute} ${hour} * * 1-5`, label: `每个工作日 ${displayTime}` };
+  }
+  if (/每天|每日/.test(text)) {
+    return { cronExpression: `${minute} ${hour} * * *`, label: `每天 ${displayTime}` };
+  }
+  const weekMatch = text.match(/每周([一二三四五六日天])/);
+  if (weekMatch) {
+    const weekdayMap: Record<string, number> = {
+      一: 1,
+      二: 2,
+      三: 3,
+      四: 4,
+      五: 5,
+      六: 6,
+      日: 0,
+      天: 0,
+    };
+    return {
+      cronExpression: `${minute} ${hour} * * ${weekdayMap[weekMatch[1]]}`,
+      label: `每周${weekMatch[1]} ${displayTime}`,
+    };
+  }
+  return null;
+}
+
+function formatScheduleDate(value: string | null): string {
+  if (!value) return '等待调度器计算';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
 
 function WorkflowCanvasNodes({
   steps,
@@ -275,6 +352,11 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
   const [canvasMode, setCanvasMode] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [workflowFilter, setWorkflowFilter] = useState<WorkflowFilter>('all');
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleText, setScheduleText] = useState('每个工作日上午 9 点');
+  const [schedules, setSchedules] = useState<WorkflowSchedulePayload[]>([]);
+  const [scheduleBusy, setScheduleBusy] = useState(false);
+  const [scheduleError, setScheduleError] = useState('');
   const [validation, setValidation] = useState<{
     valid: boolean;
     errors: Array<{ code: string; message: string; path?: string; severity?: string }>;
@@ -312,6 +394,11 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
   useEffect(() => {
     if (initialWorkflowId) setSelectedId(initialWorkflowId);
   }, [initialWorkflowId]);
+
+  useEffect(() => {
+    setScheduleOpen(false);
+    setScheduleError('');
+  }, [selectedId]);
 
   useEffect(() => {
     if (!selectedId) {
@@ -562,6 +649,78 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
     if (filteredItems.some((item) => item.id === selectedId)) return;
     setSelectedId(filteredItems[0]?.id || '');
   }, [filteredItems, selectedId]);
+
+  const schedulePreview = useMemo(() => parseScheduleText(scheduleText), [scheduleText]);
+  const selectedSchedules = schedules.filter((schedule) => schedule.workflow_id === selectedId);
+
+  const loadSchedules = async () => {
+    setScheduleBusy(true);
+    setScheduleError('');
+    try {
+      const payload = await listWorkflowSchedules();
+      setSchedules(payload.items || []);
+    } catch {
+      setScheduleError('自动运行列表加载失败，请稍后重试。');
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
+
+  const toggleSchedulePanel = () => {
+    if (scheduleOpen) {
+      setScheduleOpen(false);
+      return;
+    }
+    setScheduleOpen(true);
+    void loadSchedules();
+  };
+
+  const createSchedule = async () => {
+    if (!selected || !schedulePreview) return;
+    setScheduleBusy(true);
+    setScheduleError('');
+    try {
+      const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Asia/Shanghai';
+      const created = await createWorkflowSchedule({
+        workflow_id: selected.id,
+        name: `${selected.name} · ${schedulePreview.label}`.slice(0, 128),
+        cron_expression: schedulePreview.cronExpression,
+        timezone,
+        metadata: {
+          input_text: inputText,
+          context: preferred ? { preferred_agent_id: preferred } : {},
+        },
+        concurrency_policy: 'forbid',
+        misfire_policy: 'skip',
+        idempotency_prefix: `ui-${selected.id}`.slice(0, 128),
+      });
+      setSchedules((current) => [
+        created,
+        ...current.filter((item) => item.schedule_uuid !== created.schedule_uuid),
+      ]);
+      setNotice(`已创建自动运行：${schedulePreview.label}`);
+    } catch {
+      setScheduleError('创建失败，请检查时间描述后重试。');
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
+
+  const toggleScheduleEnabled = async (schedule: WorkflowSchedulePayload) => {
+    setScheduleBusy(true);
+    setScheduleError('');
+    try {
+      const updated = await setWorkflowScheduleEnabled(schedule.schedule_uuid, !schedule.enabled);
+      setSchedules((current) =>
+        current.map((item) => (item.schedule_uuid === updated.schedule_uuid ? updated : item)),
+      );
+      setNotice(updated.enabled ? '自动运行已恢复。' : '自动运行已暂停。');
+    } catch {
+      setScheduleError(schedule.enabled ? '暂停失败，请稍后重试。' : '恢复失败，请稍后重试。');
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
 
   const removeCustom = async () => {
     if (!selectedId) return;
@@ -1025,12 +1184,99 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                 >
                   {busy ? '运行中…' : '运行工作流'}
                 </button>
+                <button
+                  type="button"
+                  className="secondary-action"
+                  disabled={!selectedId}
+                  aria-expanded={scheduleOpen}
+                  onClick={toggleSchedulePanel}
+                >
+                  {scheduleOpen ? '收起自动运行' : '设置自动运行'}
+                </button>
                 {selected.custom ? (
                   <button type="button" className="danger-action" onClick={() => void removeCustom()}>
                     删除自定义
                   </button>
                 ) : null}
               </div>
+
+              {scheduleOpen ? (
+                <section className="workflow-section workflow-schedule-panel" aria-label="自动运行设置">
+                  <div className="workflow-section-heading">
+                    <div>
+                      <span className="workflow-section-kicker">AUTOMATION</span>
+                      <strong>用一句话设置自动运行</strong>
+                    </div>
+                    <span>默认禁止同一任务并发执行</span>
+                  </div>
+                  <label className="workflow-field">
+                    什么时候运行
+                    <input
+                      value={scheduleText}
+                      onChange={(event) => setScheduleText(event.target.value)}
+                      placeholder="例如：每个工作日上午 9 点"
+                      aria-label="自动运行时间"
+                    />
+                  </label>
+                  <div className={`workflow-schedule-preview ${schedulePreview ? 'is-valid' : 'is-invalid'}`}>
+                    {schedulePreview ? (
+                      <>
+                        <strong>{schedulePreview.label}</strong>
+                        <span>已识别，将按当前输入内容运行此工作流。</span>
+                      </>
+                    ) : (
+                      <>
+                        <strong>暂时无法识别</strong>
+                        <span>支持“每天 9 点”“每周一 14:30”“每 30 分钟”“每小时”。</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="workflow-schedule-actions">
+                    <button
+                      type="button"
+                      className="primary-action"
+                      disabled={scheduleBusy || !schedulePreview}
+                      onClick={() => void createSchedule()}
+                    >
+                      {scheduleBusy ? '处理中…' : '创建自动运行'}
+                    </button>
+                    <small>运行内容取自上方“输入内容”，之后可暂停或恢复。</small>
+                  </div>
+                  {scheduleError ? <p className="form-error" role="alert">{scheduleError}</p> : null}
+                  <div className="workflow-schedule-list" aria-label="当前自动运行">
+                    <div className="workflow-schedule-list-heading">
+                      <strong>当前工作流的自动运行</strong>
+                      <span>{selectedSchedules.length} 项</span>
+                    </div>
+                    {scheduleBusy && !selectedSchedules.length ? (
+                      <p className="workflow-schedule-empty">正在读取…</p>
+                    ) : selectedSchedules.length ? (
+                      selectedSchedules.map((schedule) => (
+                        <article key={schedule.schedule_uuid} className="workflow-schedule-item">
+                          <div>
+                            <strong>{schedule.name}</strong>
+                            <span>
+                              {schedule.enabled ? '运行中' : '已暂停'}
+                              {' · '}
+                              下次：{formatScheduleDate(schedule.next_fire_at)}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            className="secondary-action"
+                            disabled={scheduleBusy}
+                            onClick={() => void toggleScheduleEnabled(schedule)}
+                          >
+                            {schedule.enabled ? '暂停' : '恢复'}
+                          </button>
+                        </article>
+                      ))
+                    ) : (
+                      <p className="workflow-schedule-empty">尚未设置自动运行。</p>
+                    )}
+                  </div>
+                </section>
+              ) : null}
 
               {routeResult ? (
                 <section className="artifact-sources" style={{ marginTop: 16 }} aria-label="路由结果">

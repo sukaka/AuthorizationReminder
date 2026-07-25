@@ -49,12 +49,17 @@ describe('TaskProgressTimeline', () => {
     ]);
   });
 
-  it('shows retry and fallback actions for failed stage', () => {
+  it('runs retry and fallback actions only after explicit clicks', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const onContinueWithoutTools = vi.fn();
     render(
       <TaskProgressTimeline
         stage="failed"
         label="生成遇到问题"
         nextAction="请稍后重试或调整问题"
+        onContinueWithoutTools={onContinueWithoutTools}
+        onRetry={onRetry}
         toolCalls={[
           { tool_name: 'web_search', status: 'failed', error_code: 'WEB_SEARCH_FAILED' },
         ]}
@@ -65,6 +70,11 @@ describe('TaskProgressTimeline', () => {
     expect(screen.getByText('可重试')).toBeInTheDocument();
     expect(screen.getByText('继续普通回答')).toBeInTheDocument();
     expect(screen.getByText('联网查找未完成')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: '可重试' }));
+    await user.click(screen.getByRole('button', { name: '继续普通回答' }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    expect(onContinueWithoutTools).toHaveBeenCalledTimes(1);
   });
 
   it('requires user click before save or review actions run', async () => {

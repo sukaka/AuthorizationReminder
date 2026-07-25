@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .agent_runtime import ToolContext, ToolRegistry
@@ -11,7 +12,7 @@ from .agent_runtime.tools import PersonalMemoryTool
 from .auth import is_platform_admin_role
 from .config import Settings, get_settings
 from .dashi_ppt_runtime import DashiPptRuntimeError, generate_dashi_ppt
-from .models import SkillRunLog
+from .models import KnowledgeFile, SkillRunLog
 from .schemas import SessionPayload
 from .skill_definition import SkillDefinition
 
@@ -23,6 +24,17 @@ TOOL_ALIASES = {
     "personal_memory": "personal_memory",
     "table_generator": "pptx_export",
 }
+
+ARTIFACT_MIME_TYPES = {
+    "markdown": "text/markdown",
+    "md": "text/markdown",
+    "html": "application/zip",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "pdf": "application/pdf",
+}
+EDITABLE_ARTIFACT_TYPES = {"markdown", "md", "html", "docx", "xlsx", "pptx"}
 
 
 def _utc_now() -> datetime:
@@ -47,6 +59,39 @@ def _input_summary(payload: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_artifacts(
+    artifacts: list[dict[str, Any]],
+    *,
+    run_id: str,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(artifacts):
+        artifact = dict(item)
+        kind = str(
+            artifact.get("format")
+            or artifact.get("kind")
+            or artifact.get("artifact_type")
+            or "file"
+        ).strip().lower()
+        download_ref = str(artifact.get("download_ref") or artifact.get("download_url") or "")
+        downloadable = bool(artifact.get("downloadable", bool(download_ref)))
+        artifact.setdefault("artifact_id", f"{run_id}-{index + 1}")
+        artifact.setdefault("artifact_type", kind)
+        artifact.setdefault("kind", kind)
+        artifact.setdefault("status", "ready")
+        artifact.setdefault("version", 1)
+        artifact.setdefault("format", kind)
+        artifact.setdefault("mime_type", ARTIFACT_MIME_TYPES.get(kind, "application/octet-stream"))
+        artifact.setdefault("download_ref", download_ref)
+        artifact.setdefault("downloadable", downloadable)
+        artifact.setdefault(
+            "editable",
+            kind in {"markdown", "md"} or (downloadable and kind in EDITABLE_ARTIFACT_TYPES),
+        )
+        normalized.append(artifact)
+    return normalized
+
+
 class SkillRunner:
     def __init__(self, *, db: Session, settings: Settings | None = None) -> None:
         self.db = db
@@ -61,7 +106,7 @@ class SkillRunner:
         user_input: dict[str, Any],
     ) -> dict[str, Any]:
         self._ensure_user_can_run(skill, session)
-        self._validate_input(skill, user_input)
+        self._validate_input(skill, user_input, session=session)
         started = _utc_now()
         log = SkillRunLog(
             skill_id=skill.id,
@@ -94,6 +139,7 @@ class SkillRunner:
                 ]
             else:
                 artifacts = self._build_artifacts(skill, summary)
+            artifacts = _normalize_artifacts(artifacts, run_id=log.uuid)
             log.status = "completed"
             log.tools_used_json = tools_used
             log.output_summary_json = {
@@ -129,15 +175,53 @@ class SkillRunner:
         if skill.status != "published" and not is_platform_admin_role(session.user.role):
             raise HTTPException(status_code=404, detail="SKILL_NOT_FOUND")
 
-    def _validate_input(self, skill: SkillDefinition, user_input: dict[str, Any]) -> None:
+    def _validate_input(
+        self,
+        skill: SkillDefinition,
+        user_input: dict[str, Any],
+        *,
+        session: SessionPayload,
+    ) -> None:
         attachments = _attachments(user_input)
         if skill.requires_attachment and not attachments:
             raise HTTPException(status_code=400, detail="SKILL_ATTACHMENT_REQUIRED")
         allowed_types = {item.lower() for item in skill.manifest.input_types}
+        normalized_attachments: list[dict[str, Any]] = []
         for item in attachments:
-            file_type = str(item.get("file_type") or item.get("type") or "").lower().lstrip(".")
-            if file_type and file_type not in allowed_types:
+            file_uuid = str(item.get("file_uuid") or "").strip()
+            if not file_uuid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="SKILL_ATTACHMENT_REFERENCE_REQUIRED",
+                )
+            file_record = self.db.scalar(
+                select(KnowledgeFile).where(
+                    KnowledgeFile.uuid == file_uuid,
+                    KnowledgeFile.owner_user_id == str(session.user.id),
+                    KnowledgeFile.usage_type == "skill_input",
+                    KnowledgeFile.status == "READY",
+                    KnowledgeFile.deleted_at.is_(None),
+                    KnowledgeFile.hard_deleted_at.is_(None),
+                )
+            )
+            if file_record is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="SKILL_ATTACHMENT_NOT_AVAILABLE",
+                )
+            file_type = str(file_record.file_type or "").lower().lstrip(".")
+            if allowed_types and file_type not in allowed_types:
                 raise HTTPException(status_code=400, detail="SKILL_INPUT_TYPE_NOT_ALLOWED")
+            normalized_attachments.append(
+                {
+                    "file_uuid": file_record.uuid,
+                    "name": file_record.file_name,
+                    "file_type": file_type,
+                    "file_size": file_record.file_size,
+                }
+            )
+        if attachments:
+            user_input["attachments"] = normalized_attachments
         if not skill.permissions.allow_web and any(
             _normalize_tool_name(tool).startswith("web_") for tool in skill.allowed_tools
         ):

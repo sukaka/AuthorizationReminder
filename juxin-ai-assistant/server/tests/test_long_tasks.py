@@ -52,6 +52,7 @@ def test_queue_encrypts_private_payload_and_lists_only_owner(
     task = queued.json()
     assert task["status"] == "queued"
     assert task["draft"] == ""
+    assert task["next_action"] == "等待后台处理"
     enqueue.assert_called_once_with(task["task_id"])
     row = generation_db.scalar(select(LongTask).where(LongTask.uuid == task["task_id"]))
     assert row is not None
@@ -65,6 +66,34 @@ def test_queue_encrypts_private_payload_and_lists_only_owner(
     assert other_list.json()["total"] == 0
     assert hidden_detail.status_code == 404
     assert stolen_queue.status_code == 404
+
+
+def test_long_task_list_supports_stable_pagination(
+    client_for_user,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.long_task_routes.dispatcher.enqueue", Mock())
+    owner = client_for_user("long-pagination-owner")
+    first_task = _queue_chat(owner, _prepare_chat(owner))
+    second_task = _queue_chat(owner, _prepare_chat(owner))
+
+    assert first_task.status_code == 202
+    assert second_task.status_code == 202
+    first_page = owner.get("/api/ai/long-tasks?page=1&page_size=1")
+    second_page = owner.get("/api/ai/long-tasks?page=2&page_size=1")
+
+    assert first_page.status_code == 200
+    assert second_page.status_code == 200
+    assert first_page.json()["total"] == 2
+    assert first_page.json()["page"] == 1
+    assert first_page.json()["page_size"] == 1
+    assert len(first_page.json()["items"]) == 1
+    assert second_page.json()["page"] == 2
+    assert len(second_page.json()["items"]) == 1
+    assert (
+        first_page.json()["items"][0]["task_id"]
+        != second_page.json()["items"][0]["task_id"]
+    )
 
 
 def test_failed_task_keeps_draft_and_retry_resumes_same_task(
@@ -103,10 +132,12 @@ def test_failed_task_keeps_draft_and_retry_resumes_same_task(
     assert failed.json()["status"] == "failed"
     assert failed.json()["draft"] == "已经生成的正文草稿"
     assert failed.json()["retry_allowed"] is True
+    assert failed.json()["next_action"] == "请检查失败原因后重试"
     assert retried.status_code == 200
     assert retried.json()["status"] == "retrying"
     assert retried.json()["draft"] == "已经生成的正文草稿"
     assert retried.json()["attempt"] == 2
+    assert retried.json()["next_action"] == "正在重新进入处理队列"
     enqueue.assert_called_once_with(task["task_id"])
 
 
@@ -171,6 +202,7 @@ def test_executor_persists_streamed_draft_and_completes_chat(
     assert detail["status"] == "completed"
     assert detail["progress"] == 100
     assert detail["draft"] == "第一段第二段"
+    assert detail["next_action"] == "可打开完整结果"
     assert chat["messages"][-1]["content"] == "第一段第二段"
 
 

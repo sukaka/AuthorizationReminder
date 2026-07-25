@@ -1,6 +1,39 @@
 from __future__ import annotations
 
 
+def _seed_skill_file(
+    db,
+    *,
+    file_uuid: str,
+    owner_user_id: str,
+    file_type: str = "docx",
+    usage_type: str = "skill_input",
+):
+    from app.models import KnowledgeFile
+
+    file_record = KnowledgeFile(
+        uuid=file_uuid,
+        sso_user_id=owner_user_id,
+        owner_user_id=owner_user_id,
+        uploaded_by=owner_user_id,
+        file_name=f"{file_uuid}.{file_type}",
+        file_type=file_type,
+        file_size=128,
+        content_sha256=(file_uuid * 64)[:64],
+        status="READY",
+        key_version="v1",
+        usage_type=usage_type,
+        reference_enabled=False,
+        rag_enabled=False,
+        rag_scope="none" if usage_type == "skill_input" else "personal",
+        permission_scope="private",
+        category="Skill 输入" if usage_type == "skill_input" else "个人素材",
+    )
+    db.add(file_record)
+    db.commit()
+    return file_record
+
+
 def test_skill_registry_loads_builtin_published_skills() -> None:
     from app.skill_registry import SkillRegistry
 
@@ -74,13 +107,24 @@ def test_employee_lists_only_published_skills_and_runs_with_restricted_tools(
         "dashi-ppt",
     } <= skill_ids
 
+    attachment = _seed_skill_file(
+        generation_db,
+        file_uuid="skill-file-owned",
+        owner_user_id="employee-skill",
+    )
     run_response = client.post(
         "/api/skills/risk-assessment-review/run",
         json={
             "task_id": "task-risk-1",
             "input": {
                 "question": "请审查这份风险评估过程文档",
-                "attachments": [{"name": "风险评估.docx", "file_type": "docx"}],
+                "attachments": [
+                    {
+                        "file_uuid": attachment.uuid,
+                        "name": "伪造文件名.pdf",
+                        "file_type": "pdf",
+                    }
+                ],
             },
         },
     )
@@ -90,12 +134,20 @@ def test_employee_lists_only_published_skills_and_runs_with_restricted_tools(
     assert payload["skill_id"] == "risk-assessment-review"
     assert payload["status"] == "completed"
     assert payload["artifacts"][0]["kind"] == "markdown"
+    assert payload["artifacts"][0]["artifact_id"]
+    assert payload["artifacts"][0]["artifact_type"] == "markdown"
+    assert payload["artifacts"][0]["status"] == "ready"
+    assert payload["artifacts"][0]["format"] == "markdown"
+    assert payload["artifacts"][0]["mime_type"] == "text/markdown"
+    assert payload["artifacts"][0]["downloadable"] is False
+    assert payload["artifacts"][0]["editable"] is True
     assert "不符合项" in payload["result"]["summary"]
 
     run_log = generation_db.query(SkillRunLog).one()
     assert run_log.skill_id == "risk-assessment-review"
     assert run_log.user_id == "employee-skill"
     assert run_log.status == "completed"
+    assert run_log.input_summary_json["attachment_types"] == ["docx"]
     assert set(run_log.tools_used_json) <= {
         "file_parse",
         "company_knowledge_search",
@@ -108,21 +160,75 @@ def test_employee_lists_only_published_skills_and_runs_with_restricted_tools(
     assert tool_logs[0].run_id == run_log.uuid
 
 
-def test_skill_run_rejects_disallowed_file_types(client_for_user) -> None:
+def test_skill_run_rejects_disallowed_file_types(client_for_user, generation_db) -> None:
     client = client_for_user("employee-skill")
+    attachment = _seed_skill_file(
+        generation_db,
+        file_uuid="skill-file-zip",
+        owner_user_id="employee-skill",
+        file_type="zip",
+    )
 
     response = client.post(
         "/api/skills/risk-assessment-review/run",
         json={
             "input": {
                 "question": "请审查这份压缩包",
-                "attachments": [{"name": "材料.zip", "file_type": "zip"}],
+                "attachments": [{"file_uuid": attachment.uuid}],
             },
         },
     )
 
     assert response.status_code == 400
     assert response.json()["detail"] == "SKILL_INPUT_TYPE_NOT_ALLOWED"
+
+
+def test_skill_run_rejects_fake_attachment_without_file_reference(client_for_user) -> None:
+    client = client_for_user("employee-skill")
+
+    response = client.post(
+        "/api/skills/risk-assessment-review/run",
+        json={
+            "input": {
+                "question": "请审查这份材料",
+                "attachments": [{"name": "并不存在.docx", "file_type": "docx"}],
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "SKILL_ATTACHMENT_REFERENCE_REQUIRED"
+
+
+def test_skill_run_rejects_other_users_or_personal_reference_files(
+    client_for_user,
+    generation_db,
+) -> None:
+    client = client_for_user("employee-skill")
+    other_user_file = _seed_skill_file(
+        generation_db,
+        file_uuid="skill-file-other-user",
+        owner_user_id="another-user",
+    )
+    personal_file = _seed_skill_file(
+        generation_db,
+        file_uuid="skill-file-personal-reference",
+        owner_user_id="employee-skill",
+        usage_type="personal_reference",
+    )
+
+    for file_uuid in (other_user_file.uuid, personal_file.uuid):
+        response = client.post(
+            "/api/skills/risk-assessment-review/run",
+            json={
+                "input": {
+                    "question": "请审查这份材料",
+                    "attachments": [{"file_uuid": file_uuid}],
+                },
+            },
+        )
+        assert response.status_code == 404
+        assert response.json()["detail"] == "SKILL_ATTACHMENT_NOT_AVAILABLE"
 
 
 def test_unpublished_skills_are_hidden_from_employee_and_visible_to_admin(

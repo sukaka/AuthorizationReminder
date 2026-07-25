@@ -35,3 +35,10 @@ def test_explicit_short_summary_stays_in_foreground() -> None:
     decision = decide_chat_execution("请简短总结这份报告的三个要点")
 
     assert decision.mode == "foreground"
+
+
+def test_deep_research_defaults_to_background() -> None:
+    decision = decide_chat_execution("请深度研究企业智能体市场、竞品、技术架构和风险")
+
+    assert decision.mode == "background"
+    assert "深度研究" in decision.reason

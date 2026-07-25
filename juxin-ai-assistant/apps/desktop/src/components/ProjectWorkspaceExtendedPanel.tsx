@@ -23,6 +23,7 @@ import {
   listProjectContracts,
   listProjectExecutionRules,
   listProjectFiles,
+  listProjectMemberCandidates,
   listProjectMembers,
   listProjectMemories,
   listProjectServiceScopes,
@@ -38,6 +39,7 @@ import {
   type ProjectExecutionRulePayload,
   type ProjectFilePayload,
   type ProjectInitializationPayload,
+  type ProjectMemberCandidatePayload,
   type ProjectMemberPayload,
   type ProjectMemoryPayload,
   type ProjectServiceScopePayload,
@@ -45,7 +47,14 @@ import {
   type ProjectSystemPayload,
   type ProjectTargetGroupPayload,
 } from '../api/projects';
-import { uploadKnowledgeFile } from '../api/chat';
+import {
+  getChatSessionsByKind,
+  listKnowledgeFiles,
+  uploadKnowledgeFile,
+  type ChatSessionPayload,
+  type KnowledgeFilePayload,
+} from '../api/chat';
+import { getWorkArtifacts, type WorkArtifactItemPayload } from '../api/client';
 import { ChatPage } from '../pages/ChatPage';
 
 export type ProjectWorkspaceExtendedTab = 'chat' | 'initialization' | 'knowledge' | 'memory' | 'members';
@@ -69,6 +78,12 @@ type InitializationData = {
 type KnowledgeData = {
   files: ProjectFilePayload[];
   artifacts: ProjectArtifactPayload[];
+};
+
+type KnowledgeCandidates = {
+  files: KnowledgeFilePayload[];
+  artifacts: WorkArtifactItemPayload[];
+  sessions: ChatSessionPayload[];
 };
 
 const roleOptions = [
@@ -97,8 +112,10 @@ function resourceCount(data: InitializationData): string {
 export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: ProjectWorkspaceExtendedPanelProps) {
   const [initialization, setInitialization] = useState<InitializationData | null>(null);
   const [knowledge, setKnowledge] = useState<KnowledgeData | null>(null);
+  const [knowledgeCandidates, setKnowledgeCandidates] = useState<KnowledgeCandidates | null>(null);
   const [memories, setMemories] = useState<ProjectMemoryPayload[] | null>(null);
   const [members, setMembers] = useState<ProjectMemberPayload[] | null>(null);
+  const [memberCandidates, setMemberCandidates] = useState<ProjectMemberCandidatePayload[] | null>(null);
   const [loadingTab, setLoadingTab] = useState(false);
   const [submitting, setSubmitting] = useState('');
   const [error, setError] = useState('');
@@ -136,7 +153,13 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
   const [memberRole, setMemberRole] = useState('member');
 
   useEffect(() => {
-    if (activeTab === 'chat' || (activeTab === 'initialization' && initialization) || (activeTab === 'knowledge' && knowledge) || (activeTab === 'memory' && memories) || (activeTab === 'members' && members)) {
+    if (
+      activeTab === 'chat'
+      || (activeTab === 'initialization' && initialization)
+      || (activeTab === 'knowledge' && knowledge && knowledgeCandidates)
+      || (activeTab === 'memory' && memories)
+      || (activeTab === 'members' && members && memberCandidates)
+    ) {
       return undefined;
     }
     let cancelled = false;
@@ -157,15 +180,41 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
         if (!cancelled) setInitialization({ summary, contracts, scopes, systems, assets, targetGroups, targets, rules });
       })
       : activeTab === 'knowledge'
-        ? Promise.all([listProjectFiles(projectUuid), listProjectArtifacts(projectUuid)]).then(([files, artifacts]) => {
-          if (!cancelled) setKnowledge({ files, artifacts });
+        ? Promise.all([
+          listProjectFiles(projectUuid),
+          listProjectArtifacts(projectUuid),
+          listKnowledgeFiles(),
+          getWorkArtifacts(),
+          getChatSessionsByKind('active'),
+        ]).then(([files, artifacts, personalFiles, personalArtifacts, personalSessions]) => {
+          if (cancelled) return;
+          const linkedFileUuids = new Set(files.map((item) => item.file_uuid));
+          const linkedArtifactUuids = new Set(artifacts.map((item) => item.artifact_uuid));
+          setKnowledge({ files, artifacts });
+          setKnowledgeCandidates({
+            files: personalFiles.items.filter(
+              (item) => item.usage_type !== 'skill_input'
+                && item.status.toUpperCase() === 'READY'
+                && !linkedFileUuids.has(item.file_uuid),
+            ),
+            artifacts: personalArtifacts.items.filter(
+              (item) => item.status === 'active' && !linkedArtifactUuids.has(item.artifact_uuid),
+            ),
+            sessions: personalSessions.items.filter((item) => item.workspace_type === 'personal'),
+          });
         })
         : activeTab === 'memory'
           ? listProjectMemories(projectUuid).then((nextMemories) => {
             if (!cancelled) setMemories(nextMemories);
           })
-          : listProjectMembers(projectUuid).then((nextMembers) => {
-            if (!cancelled) setMembers(nextMembers);
+          : Promise.all([
+            listProjectMembers(projectUuid),
+            listProjectMemberCandidates(projectUuid),
+          ]).then(([nextMembers, nextCandidates]) => {
+            if (!cancelled) {
+              setMembers(nextMembers);
+              setMemberCandidates(nextCandidates);
+            }
           });
 
     load.catch(() => {
@@ -177,7 +226,7 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     return () => {
       cancelled = true;
     };
-  }, [activeTab, initialization, knowledge, members, memories, projectUuid]);
+  }, [activeTab, initialization, knowledge, knowledgeCandidates, memberCandidates, members, memories, projectUuid]);
 
   const runMutation = async (key: string, action: () => Promise<void>, message: string) => {
     setSubmitting(key);
@@ -339,8 +388,12 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     await runMutation('file', async () => {
       const created = await linkProjectFile(projectUuid, fileUuid.trim());
       setKnowledge((current) => current ? { ...current, files: [created, ...current.files] } : current);
+      setKnowledgeCandidates((current) => current ? {
+        ...current,
+        files: current.files.filter((item) => item.file_uuid !== fileUuid.trim()),
+      } : current);
       setFileUuid('');
-    }, '知识文件关联失败，请确认文件 UUID 和权限。');
+    }, '知识文件关联失败，请确认所选资料仍然可用。');
   };
 
   const handleLinkArtifact = async (event: FormEvent<HTMLFormElement>) => {
@@ -349,8 +402,12 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     await runMutation('artifact-link', async () => {
       const created = await linkProjectArtifact(projectUuid, artifactUuid.trim());
       setKnowledge((current) => current ? { ...current, artifacts: [created, ...current.artifacts] } : current);
+      setKnowledgeCandidates((current) => current ? {
+        ...current,
+        artifacts: current.artifacts.filter((item) => item.artifact_uuid !== artifactUuid.trim()),
+      } : current);
       setArtifactUuid('');
-    }, '成果关联失败，请确认成果 UUID 和权限。');
+    }, '成果关联失败，请确认所选成果仍然可用。');
   };
 
   const handleCopyArtifact = async (artifact: ProjectArtifactPayload) => {
@@ -371,8 +428,12 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
         move_artifacts: moveArtifacts,
         keep_personal_copy: keepPersonalCopy,
       });
+      setKnowledgeCandidates((current) => current ? {
+        ...current,
+        sessions: current.sessions.filter((item) => item.session_uuid !== sessionUuid.trim()),
+      } : current);
       setSessionUuid('');
-    }, '会话迁移失败，请确认会话 UUID 和项目权限。');
+    }, '会话迁移失败，请确认所选会话仍然可用。');
   };
 
   const handleAddMember = async (event: FormEvent<HTMLFormElement>) => {
@@ -381,8 +442,11 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     await runMutation('member-add', async () => {
       const created = await addProjectMember(projectUuid, { user_id: memberUserId.trim(), role: memberRole });
       setMembers((current) => current ? [...current, created] : current);
+      setMemberCandidates((current) => current
+        ? current.filter((item) => item.user_id !== memberUserId.trim())
+        : current);
       setMemberUserId('');
-    }, '成员添加失败，请检查用户 ID 或权限。');
+    }, '成员添加失败，请确认所选企业用户和项目权限。');
   };
 
   const handleUpdateMember = async (member: ProjectMemberPayload, role: string) => {
@@ -399,8 +463,8 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     }, '成员移除失败，请稍后重试。');
   };
 
-  const renderFormButton = (key: string, label: string) => (
-    <button className="project-secondary-button" disabled={submitting === key} type="submit">
+  const renderFormButton = (key: string, label: string, disabled = false) => (
+    <button className="project-secondary-button" disabled={submitting === key || disabled} type="submit">
       {submitting === key ? '保存中…' : label}
     </button>
   );
@@ -467,14 +531,14 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     </div>
   );
 
-  const renderKnowledge = (data: KnowledgeData) => (
+  const renderKnowledge = (data: KnowledgeData, candidates: KnowledgeCandidates) => (
     <div className="project-extended-stack">
       <section className="project-extended-status-card"><div><span className="project-card-kicker">PROJECT KNOWLEDGE</span><h4>项目资料与成果</h4><p>把项目范围内的资料和已产出的成果集中到同一个可追溯上下文。</p></div><span className="project-status project-status-active">{data.files.length + data.artifacts.length} 项</span></section>
       <div className="project-extended-grid project-extended-grid-two">
-        <section className="project-extended-card"><div className="project-extended-card-header"><div><span className="project-card-kicker">FILES</span><h4>项目知识文件</h4></div><span>{data.files.length}</span></div><form aria-label="关联项目知识文件" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleLinkFile(event)}><input aria-label="知识文件 UUID" onChange={(event) => setFileUuid(event.target.value)} placeholder="粘贴知识文件 UUID" value={fileUuid} />{renderFormButton('file', '关联文件')}</form><div className="project-inline-list">{data.files.map((item) => <div className="project-inline-row" key={item.project_file_uuid}><div><strong>{item.file_name}</strong><small>{item.category} · {item.file_type}</small></div><span className="project-status project-status-active">已关联</span></div>)}{!data.files.length ? <p className="project-empty-inline">还没有项目知识文件。可在项目对话中上传后关联。</p> : null}</div></section>
-        <section className="project-extended-card"><div className="project-extended-card-header"><div><span className="project-card-kicker">ARTIFACTS</span><h4>项目成果</h4></div><span>{data.artifacts.length}</span></div><form aria-label="关联项目成果" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleLinkArtifact(event)}><input aria-label="成果 UUID" onChange={(event) => setArtifactUuid(event.target.value)} placeholder="粘贴成果 UUID" value={artifactUuid} />{renderFormButton('artifact-link', '关联成果')}</form><div className="project-inline-list">{data.artifacts.map((item) => <div className="project-inline-row project-inline-row-top" key={item.project_artifact_uuid}><div><strong>{item.title}</strong><small>{item.file_name || item.artifact_type} · {item.content_summary || '暂无摘要'}</small></div><div className="project-inline-actions"><span className="project-status project-status-active">项目内</span><button aria-label={`复制成果到个人 ${item.title}`} className="project-secondary-button" disabled={submitting === `artifact-copy-${item.artifact_uuid}`} onClick={() => void handleCopyArtifact(item)} type="button">复制到个人</button></div></div>)}{!data.artifacts.length ? <p className="project-empty-inline">项目交付物归属项目后会显示在这里。</p> : null}</div></section>
+        <section className="project-extended-card"><div className="project-extended-card-header"><div><span className="project-card-kicker">FILES</span><h4>项目知识文件</h4></div><span>{data.files.length}</span></div><form aria-label="关联项目知识文件" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleLinkFile(event)}><select aria-label="选择个人资料" onChange={(event) => setFileUuid(event.target.value)} value={fileUuid}><option value="">{candidates.files.length ? '选择个人资料' : '没有可关联的个人资料'}</option>{candidates.files.map((item) => <option key={item.file_uuid} value={item.file_uuid}>{item.file_name} · {item.category || item.document_type || item.file_type}</option>)}</select>{renderFormButton('file', '关联文件', !fileUuid)}</form><div className="project-inline-list">{data.files.map((item) => <div className="project-inline-row" key={item.project_file_uuid}><div><strong>{item.file_name}</strong><small>{item.category} · {item.file_type}</small></div><span className="project-status project-status-active">已关联</span></div>)}{!data.files.length ? <p className="project-empty-inline">还没有项目知识文件。请从上方个人资料中选择。</p> : null}</div></section>
+        <section className="project-extended-card"><div className="project-extended-card-header"><div><span className="project-card-kicker">ARTIFACTS</span><h4>项目成果</h4></div><span>{data.artifacts.length}</span></div><form aria-label="关联项目成果" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleLinkArtifact(event)}><select aria-label="选择个人成果" onChange={(event) => setArtifactUuid(event.target.value)} value={artifactUuid}><option value="">{candidates.artifacts.length ? '选择个人成果' : '没有可关联的个人成果'}</option>{candidates.artifacts.map((item) => <option key={item.artifact_uuid} value={item.artifact_uuid}>{item.title} · {item.file_name || item.artifact_type}</option>)}</select>{renderFormButton('artifact-link', '关联成果', !artifactUuid)}</form><div className="project-inline-list">{data.artifacts.map((item) => <div className="project-inline-row project-inline-row-top" key={item.project_artifact_uuid}><div><strong>{item.title}</strong><small>{item.file_name || item.artifact_type} · {item.content_summary || '暂无摘要'}</small></div><div className="project-inline-actions"><span className="project-status project-status-active">项目内</span><button aria-label={`复制成果到个人 ${item.title}`} className="project-secondary-button" disabled={submitting === `artifact-copy-${item.artifact_uuid}`} onClick={() => void handleCopyArtifact(item)} type="button">复制到个人</button></div></div>)}{!data.artifacts.length ? <p className="project-empty-inline">项目交付物归属项目后会显示在这里。</p> : null}</div></section>
       </div>
-      <section className="project-extended-card"><div className="project-extended-card-header"><div><span className="project-card-kicker">SESSION MIGRATION</span><h4>迁移个人会话</h4></div><span className="project-status">可选</span></div><p className="project-inline-help">将个人会话迁入当前项目；可保留个人副本，并同步会话中的附件和成果。</p><form aria-label="迁移个人会话" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleMoveSession(event)}><input aria-label="个人会话 UUID" onChange={(event) => setSessionUuid(event.target.value)} placeholder="粘贴个人会话 UUID" value={sessionUuid} /><label className="project-check-option"><input checked={keepPersonalCopy} onChange={(event) => setKeepPersonalCopy(event.target.checked)} type="checkbox" />保留个人副本</label><label className="project-check-option"><input checked={moveAttachments} onChange={(event) => setMoveAttachments(event.target.checked)} type="checkbox" />迁移附件</label><label className="project-check-option"><input checked={moveArtifacts} onChange={(event) => setMoveArtifacts(event.target.checked)} type="checkbox" />迁移成果</label>{renderFormButton('session-move', '迁移会话')}</form></section>
+      <section className="project-extended-card"><div className="project-extended-card-header"><div><span className="project-card-kicker">SESSION MIGRATION</span><h4>迁移个人会话</h4></div><span className="project-status">可选</span></div><p className="project-inline-help">将个人会话迁入当前项目；可保留个人副本，并同步会话中的附件和成果。</p><form aria-label="迁移个人会话" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleMoveSession(event)}><select aria-label="选择个人会话" onChange={(event) => setSessionUuid(event.target.value)} value={sessionUuid}><option value="">{candidates.sessions.length ? '选择个人会话' : '没有可迁移的个人会话'}</option>{candidates.sessions.map((item) => <option key={item.session_uuid} value={item.session_uuid}>{item.title || '未命名会话'} · {new Date(item.updated_at).toLocaleDateString('zh-CN')}</option>)}</select><label className="project-check-option"><input checked={keepPersonalCopy} onChange={(event) => setKeepPersonalCopy(event.target.checked)} type="checkbox" />保留个人副本</label><label className="project-check-option"><input checked={moveAttachments} onChange={(event) => setMoveAttachments(event.target.checked)} type="checkbox" />迁移附件</label><label className="project-check-option"><input checked={moveArtifacts} onChange={(event) => setMoveArtifacts(event.target.checked)} type="checkbox" />迁移成果</label>{renderFormButton('session-move', '迁移会话', !sessionUuid)}</form></section>
     </div>
   );
 
@@ -485,10 +549,10 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
     </div>
   );
 
-  const renderMembers = (items: ProjectMemberPayload[]) => (
+  const renderMembers = (items: ProjectMemberPayload[], candidates: ProjectMemberCandidatePayload[]) => (
     <div className="project-extended-stack">
       <section className="project-extended-status-card"><div><span className="project-card-kicker">MEMBERS & PERMISSIONS</span><h4>成员与权限</h4><p>按项目维护成员角色。项目负责人是不可移除的项目所有者。</p></div><span className="project-status project-status-active">{items.length} 人</span></section>
-      <section className="project-extended-card"><form aria-label="添加项目成员" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleAddMember(event)}><input aria-label="成员用户 ID" onChange={(event) => setMemberUserId(event.target.value)} placeholder="成员用户 ID" value={memberUserId} /><select aria-label="新成员角色" onChange={(event) => setMemberRole(event.target.value)} value={memberRole}>{roleOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>{renderFormButton('member-add', '添加成员')}</form><div className="project-member-table" role="table" aria-label="项目成员列表">{items.map((item) => { const owner = item.role === 'project_lead'; return <div className="project-member-row" key={item.member_uuid} role="row"><div><strong>{item.user_id}</strong><small>{owner ? '项目负责人 · 不可修改' : `加入于 ${new Date(item.created_at).toLocaleDateString('zh-CN')}`}</small></div><div className="project-member-actions">{owner ? <span className="project-status project-status-active">项目负责人</span> : <><select aria-label={`${item.user_id} 的角色`} disabled={submitting === `member-${item.member_uuid}`} onChange={(event) => void handleUpdateMember(item, event.target.value)} value={item.role}>{roleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button aria-label={`移除成员 ${item.user_id}`} className="project-secondary-button" disabled={submitting === `member-remove-${item.member_uuid}`} onClick={() => void handleRemoveMember(item)} type="button">移除</button></>}</div></div>; })}{!items.length ? <p className="project-empty-state">项目还没有其他成员。</p> : null}</div></section>
+      <section className="project-extended-card"><form aria-label="添加项目成员" className="project-extended-form project-extended-form-compact" onSubmit={(event) => void handleAddMember(event)}><select aria-label="选择企业用户" onChange={(event) => setMemberUserId(event.target.value)} value={memberUserId}><option value="">{candidates.length ? '选择企业用户' : '没有可添加的企业用户'}</option>{candidates.map((item) => <option key={item.user_id} value={item.user_id}>{item.username}{item.department_code ? ` · ${item.department_code}` : ''}{item.role ? ` · ${item.role}` : ''}</option>)}</select><select aria-label="新成员角色" onChange={(event) => setMemberRole(event.target.value)} value={memberRole}>{roleOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>{renderFormButton('member-add', '添加成员', !memberUserId)}</form><div className="project-member-table" role="table" aria-label="项目成员列表">{items.map((item) => { const owner = item.role === 'project_lead'; return <div className="project-member-row" key={item.member_uuid} role="row"><div><strong>{item.user_id}</strong><small>{owner ? '项目负责人 · 不可修改' : `加入于 ${new Date(item.created_at).toLocaleDateString('zh-CN')}`}</small></div><div className="project-member-actions">{owner ? <span className="project-status project-status-active">项目负责人</span> : <><select aria-label={`${item.user_id} 的角色`} disabled={submitting === `member-${item.member_uuid}`} onChange={(event) => void handleUpdateMember(item, event.target.value)} value={item.role}>{roleOptions.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select><button aria-label={`移除成员 ${item.user_id}`} className="project-secondary-button" disabled={submitting === `member-remove-${item.member_uuid}`} onClick={() => void handleRemoveMember(item)} type="button">移除</button></>}</div></div>; })}{!items.length ? <p className="project-empty-state">项目还没有其他成员。</p> : null}</div></section>
     </div>
   );
 
@@ -502,9 +566,9 @@ export function ProjectWorkspaceExtendedPanel({ activeTab, projectUuid }: Projec
       {error ? <p aria-live="polite" className="project-extended-error">{error}</p> : null}
       {loadingTab ? <p className="project-loading-state">正在加载项目资源…</p> : null}
       {!loadingTab && activeTab === 'initialization' && initialization ? renderInitialization(initialization) : null}
-      {!loadingTab && activeTab === 'knowledge' && knowledge ? renderKnowledge(knowledge) : null}
+      {!loadingTab && activeTab === 'knowledge' && knowledge && knowledgeCandidates ? renderKnowledge(knowledge, knowledgeCandidates) : null}
       {!loadingTab && activeTab === 'memory' && memories ? renderMemory(memories) : null}
-      {!loadingTab && activeTab === 'members' && members ? renderMembers(members) : null}
+      {!loadingTab && activeTab === 'members' && members && memberCandidates ? renderMembers(members, memberCandidates) : null}
     </div>
   );
 }

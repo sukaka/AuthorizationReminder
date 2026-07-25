@@ -73,6 +73,23 @@ class SkillRunIn(BaseModel):
     input: dict[str, Any] = Field(default_factory=dict)
 
 
+class SkillArtifactOut(BaseModel):
+    artifact_id: str
+    artifact_type: str
+    kind: str
+    title: str
+    status: str
+    version: int
+    format: str
+    mime_type: str
+    download_url: str | None = None
+    download_ref: str = ""
+    downloadable: bool = False
+    editable: bool = False
+    file_name: str = ""
+    content: str = ""
+
+
 class SkillRunOut(BaseModel):
     run_id: str
     skill_id: str
@@ -80,7 +97,7 @@ class SkillRunOut(BaseModel):
     status: str
     tools_used: list[str]
     result: dict[str, Any]
-    artifacts: list[dict[str, Any]]
+    artifacts: list[SkillArtifactOut]
 
 
 class SkillRunLogOut(BaseModel):

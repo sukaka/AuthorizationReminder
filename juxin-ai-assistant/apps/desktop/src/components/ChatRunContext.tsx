@@ -33,6 +33,7 @@ type ChatRunContextProps = {
   messages: ChatRunContextMessage[];
   onStop?: () => void;
   onRetry?: () => void;
+  onContinueWithoutTools?: () => void;
   onOpenTaskCenter?: (runId?: string) => void;
 };
 
@@ -132,6 +133,7 @@ export function ChatRunContext({
   messages,
   onStop,
   onRetry,
+  onContinueWithoutTools,
   onOpenTaskCenter,
 }: ChatRunContextProps) {
   const [activeTab, setActiveTab] = useState<ContextTab>('plan');
@@ -178,9 +180,9 @@ export function ChatRunContext({
 
   if (!hasContext) {
     return (
-      <aside className="chat-run-context is-empty" aria-label="Run 上下文">
+      <aside className="chat-run-context is-empty" aria-label="任务详情">
         <div className="chat-run-context-empty-icon" aria-hidden="true">↗</div>
-        <strong>Run 上下文</strong>
+        <strong>任务详情</strong>
         <p>发送任务后，这里会显示计划、活动、来源和交付成果。</p>
       </aside>
     );
@@ -194,10 +196,10 @@ export function ChatRunContext({
   ];
 
   return (
-    <aside className="chat-run-context" aria-label="Run 上下文">
+    <aside className="chat-run-context" aria-label="任务详情">
       <header className="chat-run-context-header">
         <div>
-          <span className="chat-run-context-eyebrow">RUN CONTEXT</span>
+          <span className="chat-run-context-eyebrow">任务详情</span>
           <strong>当前任务</strong>
         </div>
         <span className={`chat-run-context-status is-${status === 'idle' ? taskProgress?.stage || 'idle' : status}`}>
@@ -205,11 +207,7 @@ export function ChatRunContext({
           {statusLabel(status, taskProgress)}
         </span>
       </header>
-      <div className="chat-run-context-meta">
-        <span title={runId || '尚未创建 Run'}>{runId ? `Run ${runId.slice(0, 8)}` : '尚未创建 Run'}</span>
-        {sessionUuid ? <span title={sessionUuid}>会话 {sessionUuid.slice(0, 8)}</span> : null}
-      </div>
-      <nav className="chat-run-context-tabs" aria-label="Run 视图">
+      <nav className="chat-run-context-tabs" aria-label="任务视图">
         {tabs.map((tab) => (
           <button
             className={activeTab === tab.id ? 'is-active' : ''}
@@ -339,8 +337,11 @@ export function ChatRunContext({
       </div>
 
       <footer className="chat-run-context-footer">
-        {status === 'running' && onStop ? <button onClick={onStop} type="button">停止 Run</button> : null}
+        {status === 'running' && onStop ? <button onClick={onStop} type="button">停止任务</button> : null}
         {(taskProgress?.stage === 'failed' || taskProgress?.stage === 'stopped') && onRetry ? <button onClick={onRetry} type="button">重新运行</button> : null}
+        {taskProgress?.stage === 'failed' && onContinueWithoutTools ? (
+          <button onClick={onContinueWithoutTools} type="button">继续普通回答</button>
+        ) : null}
         {runId && onOpenTaskCenter ? <button onClick={() => onOpenTaskCenter(runId)} type="button">打开任务中心</button> : null}
       </footer>
     </aside>

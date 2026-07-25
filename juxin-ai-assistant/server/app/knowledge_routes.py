@@ -310,6 +310,10 @@ def _file_out(db: Session, file_record: KnowledgeFile) -> KnowledgeFileOut:
         status=file_record.status,
         chunk_count=int(chunk_count),
         created_at=file_record.created_at,
+        updated_at=file_record.updated_at,
+        content_sha256=file_record.content_sha256,
+        version=file_record.version,
+        is_current_version=file_record.is_current_version,
         source_type=file_record.source_type,
         source_origin=file_record.source_origin,
         web_capture_id=file_record.web_capture_id,
@@ -505,7 +509,11 @@ async def _require_file_view(
 def _can_manage_file(file_record: KnowledgeFile, *, user_id: str, is_admin: bool) -> bool:
     return is_admin or (
         file_record.owner_user_id == user_id
-        and file_record.usage_type in {"personal_reference", "session_attachment"}
+        and file_record.usage_type in {
+            "personal_reference",
+            "session_attachment",
+            "skill_input",
+        }
     )
 
 
@@ -1359,6 +1367,7 @@ async def list_knowledge_files(
         KnowledgeFile.status != "DELETED",
         KnowledgeFile.deleted_at.is_(None),
         KnowledgeFile.hard_deleted_at.is_(None),
+        KnowledgeFile.usage_type != "skill_input",
     ]
     if not is_admin:
         filters.append(
@@ -1406,6 +1415,7 @@ async def list_knowledge_file_trash(
     filters = [
         KnowledgeFile.status == "DELETED",
         KnowledgeFile.hard_deleted_at.is_(None),
+        KnowledgeFile.usage_type != "skill_input",
     ]
     if not is_admin:
         filters.append(KnowledgeFile.owner_user_id == user_id)
@@ -1885,6 +1895,7 @@ async def upload_knowledge_file(
         "session_attachment",
         "personal_reference",
         "official_knowledge",
+        "skill_input",
     }:
         raise HTTPException(status_code=422, detail="知识文件用途无效")
 
@@ -1919,27 +1930,47 @@ async def upload_knowledge_file(
     else:
         if rag_enabled or review_status.strip().lower() in {"approved", "official"}:
             raise HTTPException(status_code=403, detail="普通资料不能直接启用正式 RAG")
-        if base is not None and base.scope != "personal":
-            raise HTTPException(status_code=422, detail="个人资料只能关联个人知识库")
-        if base is not None and not _can_manage_base(base, user_id=user_id, is_admin=is_admin):
-            raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
+        if normalized_usage_type == "skill_input":
+            if base is not None:
+                raise HTTPException(status_code=422, detail="Skill 输入材料不能关联知识库")
+            normalized_rag_scope = "none"
+            category = "Skill 输入"
+            normalized_review_status = "draft"
+            normalized_permission_scope = "private"
+            normalized_visibility = "PRIVATE"
+            source_type = "user_upload"
+            normalized_rag_enabled = False
+            normalized_reference_enabled = False
+        else:
+            if base is not None and base.scope != "personal":
+                raise HTTPException(status_code=422, detail="个人资料只能关联个人知识库")
+            if base is not None and not _can_manage_base(base, user_id=user_id, is_admin=is_admin):
+                raise HTTPException(status_code=403, detail="无权向该知识库上传文档")
         if normalized_usage_type == "session_attachment":
             if not conversation_id.strip():
                 raise HTTPException(status_code=422, detail="当前会话附件必须提供会话 ID")
             normalized_rag_scope = "session"
             category = category if category.strip() else "当前附件"
-        else:
+            normalized_review_status = (
+                "pending" if review_status.strip().lower() == "pending" else "draft"
+            )
+            normalized_permission_scope = "private"
+            normalized_visibility = "PRIVATE"
+            source_type = "user_upload"
+            normalized_rag_enabled = False
+            normalized_reference_enabled = reference_enabled
+        elif normalized_usage_type == "personal_reference":
             normalized_usage_type = "personal_reference"
             normalized_rag_scope = "personal"
             category = category if category.strip() else "个人素材"
-        normalized_review_status = (
-            "pending" if review_status.strip().lower() == "pending" else "draft"
-        )
-        normalized_permission_scope = "private"
-        normalized_visibility = "PRIVATE"
-        source_type = "user_upload"
-        normalized_rag_enabled = False
-        normalized_reference_enabled = reference_enabled
+            normalized_review_status = (
+                "pending" if review_status.strip().lower() == "pending" else "draft"
+            )
+            normalized_permission_scope = "private"
+            normalized_visibility = "PRIVATE"
+            source_type = "user_upload"
+            normalized_rag_enabled = False
+            normalized_reference_enabled = reference_enabled
 
     content = await file.read(MAX_KNOWLEDGE_FILE_BYTES + 1)
     if len(content) > MAX_KNOWLEDGE_FILE_BYTES:

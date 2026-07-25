@@ -242,6 +242,75 @@ it('queues a server-model chat for background processing', async () => {
   expect(generateLocalModelMock).not.toHaveBeenCalled();
 });
 
+it('shows an automatic research plan and queues deep research in background', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  const queuedRequest = vi.fn();
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.post('/api/ai/chat/prepare', () => HttpResponse.json({
+      session_uuid: 'session-research',
+      user_message_uuid: 'user-research',
+      assistant_message_uuid: 'assistant-research',
+      completion_token: 'complete-research',
+      completed: false,
+      answer: '',
+      execution_mode: 'background',
+      execution_reason: '深度研究需要多来源检索与交叉核验',
+      research_plan: {
+        objective: '深度研究企业智能体市场',
+        questions: ['市场现状与主要参与者是什么？', '关键结论有哪些公开来源可以交叉验证？'],
+        source_scope: '公开网页、机构资料、政策文件与厂商官方材料',
+        citation_policy: '关键事实必须标注来源，重要结论至少进行双源核验',
+        uncertainty_policy: '资料不足或来源冲突时明确说明不确定性，不得猜测',
+      },
+      messages: [
+        { role: 'system', content: '你是聚信 AI 助手' },
+        { role: 'user', content: '请深度研究企业智能体市场' },
+      ],
+      citations: [],
+    }, { status: 201 })),
+    http.post('/api/ai/long-tasks/chat-generation', async ({ request }) => {
+      queuedRequest(await request.json());
+      return HttpResponse.json({
+        task_id: 'long-research',
+        task_type: 'chat_generation',
+        title: '请深度研究企业智能体市场',
+        conversation_id: 'session-research',
+        message_uuid: 'assistant-research',
+        status: 'queued',
+        stage: 'queued',
+        progress: 0,
+        attempt: 1,
+        draft: '',
+        error_code: '',
+        error_message: '',
+        retry_allowed: false,
+        cancel_allowed: true,
+        created_at: '2026-07-10T04:00:00Z',
+        updated_at: '2026-07-10T04:00:00Z',
+      }, { status: 202 });
+    }),
+  );
+
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '请深度研究企业智能体市场');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
+
+  expect(await screen.findByText('自动研究计划')).toBeInTheDocument();
+  expect(screen.getByText('深度研究企业智能体市场')).toBeInTheDocument();
+  expect(screen.getByText('市场现状与主要参与者是什么？')).toBeInTheDocument();
+  expect(screen.getByText('已进入后台深度研究，可继续其他工作。完成后会通知你。')).toBeInTheDocument();
+  expect(queuedRequest).toHaveBeenCalledWith(expect.objectContaining({
+    conversation_id: 'session-research',
+    message_uuid: 'assistant-research',
+  }));
+  expect(generateLocalModelMock).not.toHaveBeenCalled();
+});
+
 it('restores a failed background task with its draft and retries it', async () => {
   Object.defineProperty(window, '__TAURI_INTERNALS__', {
     configurable: true,
@@ -303,82 +372,6 @@ it('restores a failed background task with its draft and retries it', async () =
   await userEvent.click(within(tray).getByRole('button', { name: '取消' }));
   expect(cancel).toHaveBeenCalledOnce();
   expect(tray).toHaveTextContent('已取消');
-});
-
-it('notifies when a background task completes and loads the full result', async () => {
-  Object.defineProperty(window, '__TAURI_INTERNALS__', {
-    configurable: true,
-    value: undefined,
-  });
-  let longTaskRequests = 0;
-  const loadedSession = vi.fn();
-  const runningTask = {
-    task_id: 'long-completes',
-    task_type: 'chat_generation',
-    title: '客户合规解决方案 PPT',
-    conversation_id: 'session-completed',
-    message_uuid: 'assistant-completed',
-    status: 'running',
-    stage: 'generating',
-    progress: 60,
-    attempt: 1,
-    draft: '正在生成第 6 页…',
-    error_code: '',
-    error_message: '',
-    retry_allowed: false,
-    cancel_allowed: true,
-    created_at: '2026-07-10T04:00:00Z',
-    updated_at: '2026-07-10T04:01:00Z',
-  } as const;
-  server.use(
-    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
-    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
-    http.get('/api/ai/long-tasks', () => {
-      longTaskRequests += 1;
-      const task = longTaskRequests === 1
-        ? runningTask
-        : {
-            ...runningTask,
-            status: 'completed' as const,
-            stage: 'completed',
-            progress: 100,
-            draft: 'PPT 已生成完成。',
-            cancel_allowed: false,
-            updated_at: '2026-07-10T04:02:00Z',
-          };
-      return HttpResponse.json({ items: [task], total: 1 });
-    }),
-    http.get('/api/ai/chat/sessions/session-completed', () => {
-      loadedSession();
-      return HttpResponse.json({
-        session_uuid: 'session-completed',
-        title: '客户合规解决方案 PPT',
-        mode: 'normal',
-        status: 'active',
-        workspace_type: 'personal',
-        project_uuid: null,
-        created_at: '2026-07-10T04:00:00Z',
-        updated_at: '2026-07-10T04:02:00Z',
-        messages: [{
-          message_uuid: 'assistant-completed',
-          role: 'assistant',
-          content: '这是后台任务生成的完整 PPT 结果。',
-          status: 'COMPLETED',
-          citations: [],
-          generated_files: [],
-          created_at: '2026-07-10T04:02:00Z',
-        }],
-      });
-    }),
-  );
-
-  render(<ChatPage />);
-
-  const notice = await screen.findByRole('status', { name: '后台任务完成' }, { timeout: 3500 });
-  expect(notice).toHaveTextContent('客户合规解决方案 PPT');
-  await userEvent.click(within(notice).getByRole('button', { name: '查看结果' }));
-  expect(await screen.findByText('这是后台任务生成的完整 PPT 结果。')).toBeInTheDocument();
-  expect(loadedSession).toHaveBeenCalledOnce();
 });
 
 it('detects explicit memory trigger phrases without saving sensitive content', () => {
@@ -497,7 +490,7 @@ it('retries a failed task from the progress recovery action', async () => {
   await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '帮我整理失败恢复测试');
   await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-  const runContext = await screen.findByLabelText('Run 上下文');
+  const runContext = await screen.findByLabelText('任务详情');
   expect(runContext).toHaveTextContent('需要处理');
   expect(document.querySelector('.chat-progress-rail')).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '重新运行' }));
@@ -2398,9 +2391,9 @@ it('loads messages when selecting a historical chat session', async () => {
   expect(messageList).toBeInTheDocument();
   expect(within(messageList as HTMLElement).getByText('总结会议')).toBeInTheDocument();
   expect(screen.getByText(/会议决定下周验收/)).toBeInTheDocument();
-  expect(screen.getByLabelText('Run 上下文')).toHaveTextContent('已完成');
+  expect(screen.getByLabelText('任务详情')).toHaveTextContent('已完成');
   expect(document.querySelector('.chat-progress-rail')).not.toBeInTheDocument();
-  expect(screen.getByText('Run run-hist')).toBeInTheDocument();
+  expect(screen.queryByText(/Run run-/)).not.toBeInTheDocument();
   expect(screen.getByRole('list', { name: '任务阶段' })).toHaveTextContent('正在复核结果');
   const inlineSource = screen.getByLabelText('来源：会议记录.txt');
   expect(inlineSource).toHaveClass('chat-inline-source');
@@ -2990,6 +2983,47 @@ it('shows upload failures inside the upload dialog', async () => {
 
   expect(await within(dialog).findByText('已保存 0 个资料；处理完成后会自动参与检索，失败 1 个。')).toBeInTheDocument();
   expect(within(dialog).getByRole('button', { name: /^开始上传/ })).toBeEnabled();
+});
+
+it('loads chat history incrementally instead of fetching every session at once', async () => {
+  const requestedPages: number[] = [];
+  server.use(
+    http.get('/api/conversations', ({ request }) => {
+      const page = Number(new URL(request.url).searchParams.get('page') || '1');
+      requestedPages.push(page);
+      return HttpResponse.json({
+        items: page === 1
+          ? [{
+              session_uuid: 'session-page-one',
+              title: '第一页会话',
+              mode: 'normal',
+              status: 'active',
+              created_at: '2026-07-26T01:00:00Z',
+              updated_at: '2026-07-26T01:01:00Z',
+            }]
+          : [{
+              session_uuid: 'session-page-two',
+              title: '第二页会话',
+              mode: 'normal',
+              status: 'active',
+              created_at: '2026-07-25T01:00:00Z',
+              updated_at: '2026-07-25T01:01:00Z',
+            }],
+        total: 2,
+        page,
+        page_size: 40,
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+
+  expect(await screen.findByRole('button', { name: '第一页会话' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '第二页会话' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /加载更多/ }));
+  expect(await screen.findByRole('button', { name: '第二页会话' })).toBeInTheDocument();
+  expect(requestedPages).toContain(1);
+  expect(requestedPages).toContain(2);
 });
 
 it('manages chat sessions across active, archive, and trash lists', async () => {

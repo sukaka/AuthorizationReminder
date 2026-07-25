@@ -845,9 +845,17 @@ export function OpsDashboardPage() {
               {weComChannels.map((item) => {
                 const channels = (flags.channels as Record<string, boolean> | undefined) || {};
                 const configuration = (
-                  (flags.channel_configuration as Record<string, { configured?: boolean }> | undefined) || {}
+                  (
+                    flags.channel_configuration as Record<
+                      string,
+                      { configured?: boolean; missing?: string[] }
+                    > | undefined
+                  ) || {}
                 )[item.key];
                 const enabled = Boolean(channels[item.key]);
+                const configured = Boolean(configuration?.configured);
+                const canToggle = enabled || configured;
+                const missingConfiguration = configuration?.missing || [];
                 return (
                   <label
                     key={item.key}
@@ -859,22 +867,29 @@ export function OpsDashboardPage() {
                       border: '1px solid var(--border, #e5e7eb)',
                       borderRadius: 8,
                       padding: '10px 12px',
-                      cursor: channelSaving ? 'wait' : 'pointer',
+                      cursor: channelSaving ? 'wait' : canToggle ? 'pointer' : 'not-allowed',
+                      opacity: canToggle ? 1 : 0.78,
                     }}
                   >
                     <span>
                       <strong style={{ display: 'block' }}>{item.label}</strong>
                       <span style={{ display: 'block', marginTop: 3, fontSize: 12, opacity: 0.72 }}>
-                        {item.description} · 环境配置
-                        {configuration?.configured ? '已就绪' : '未完成'}
+                        {item.description} · {configured
+                          ? '配置已就绪，可直接启用'
+                          : `待补环境变量：${missingConfiguration.join('、') || '请检查服务器 .env'}`}
                       </span>
+                      {!configured ? (
+                        <span style={{ display: 'block', marginTop: 4, fontSize: 12, color: 'var(--warning, #b54708)' }}>
+                          请在服务器 .env 补齐后重启 API，再回来开启通道。
+                        </span>
+                      ) : null}
                     </span>
                     <input
                       type="checkbox"
                       role="switch"
                       aria-label={item.label}
                       checked={enabled}
-                      disabled={channelSaving !== null}
+                      disabled={channelSaving !== null || !canToggle}
                       onChange={() => void onToggleWeComChannel(item.key, item.label)}
                     />
                   </label>

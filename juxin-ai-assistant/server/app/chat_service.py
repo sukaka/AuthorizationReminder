@@ -8,7 +8,7 @@ import uuid as uuid_lib
 from datetime import UTC, datetime
 
 from fastapi import HTTPException
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from .agent_loop import LoopRunner
@@ -23,6 +23,7 @@ from .chat_document_delivery import (
     should_generate_chat_document,
 )
 from .chat_execution_policy import decide_chat_execution
+from .chat_research import build_chat_research_plan
 from .chat_ppt_workflow import (
     build_chat_ppt_confirmation_message,
     build_chat_ppt_system_message,
@@ -647,18 +648,19 @@ def _link_search_logs_to_answer(
     db.flush()
 
 
-def _link_web_search_log_to_answer(
+def _link_web_search_logs_to_answer(
     db: Session,
     *,
-    log_id: int | None,
+    log_ids: list[int],
     answer_message_uuid: str,
 ) -> None:
-    if not log_id:
+    if not log_ids:
         return
-    log = db.get(WebSearchLog, log_id)
-    if log is None:
-        return
-    log.answer_message_id = answer_message_uuid
+    logs = db.scalars(
+        select(WebSearchLog).where(WebSearchLog.id.in_(log_ids))
+    )
+    for log in logs:
+        log.answer_message_id = answer_message_uuid
     db.flush()
 
 
@@ -759,6 +761,7 @@ def prepare_chat(
     loop_runner = LoopRunner()
     analysis = loop_runner.task_analyzer.analyze(body.question, body.mode)
     route = ModeRouter.route(mode=body.mode, question=body.question)
+    research_plan = build_chat_research_plan(body.question)
     execution_decision = decide_chat_execution(body.question)
     mode = analysis.mode.upper()
     session = _get_or_create_session(
@@ -871,34 +874,103 @@ def prepare_chat(
             execution_reason=execution_decision.reason,
         )
     web_results: list[WebSearchResult] = []
-    web_log_id: int | None = None
+    web_log_ids: list[int] = []
     should_search_web = (
-        SearchIntentDetector().should_search(body.question)
+        (research_plan is not None or SearchIntentDetector().should_search(body.question))
         and not UrlExtractor().extract_first(body.question)
     )
     if should_search_web:
-        try:
-            web_results = WebSearchService(
-                provider=create_search_provider(web_search_provider),
-            ).search(
-                body.question,
-                limit=5,
-                db=db,
-                user_id=sso_user_id,
+        search_service = WebSearchService(
+            provider=create_search_provider(web_search_provider),
+        )
+        search_queries = (
+            list(research_plan.questions)
+            if research_plan is not None
+            else [body.question]
+        )
+        seen_urls: set[str] = set()
+        failed_queries = 0
+        for search_query in search_queries:
+            try:
+                query_results = search_service.search(
+                    search_query,
+                    limit=3 if research_plan is not None else 5,
+                    db=db,
+                    user_id=sso_user_id,
+                )
+                log = WebSearchLog(
+                    user_id=sso_user_id,
+                    conversation_id=session.uuid,
+                    query=search_query,
+                    provider=web_search_provider,
+                    status="ok" if query_results else "no_results",
+                    result_count=len(query_results),
+                    result_urls_json=[result.url for result in query_results],
+                    used_urls_json=[result.url for result in query_results],
+                )
+                db.add(log)
+                db.flush()
+                web_log_ids.append(log.id)
+                for result in query_results:
+                    normalized_url = result.url.rstrip("/")
+                    if normalized_url in seen_urls:
+                        continue
+                    seen_urls.add(normalized_url)
+                    web_results.append(result)
+                    if len(web_results) >= 18:
+                        break
+            except Exception as exc:
+                failed_queries += 1
+                error_message = str(exc)[:500]
+                log = WebSearchLog(
+                    user_id=sso_user_id,
+                    conversation_id=session.uuid,
+                    query=search_query,
+                    provider=web_search_provider,
+                    status="failed",
+                    result_count=0,
+                    result_urls_json=[],
+                    used_urls_json=[],
+                    error_message=error_message,
+                )
+                db.add(log)
+                db.flush()
+                web_log_ids.append(log.id)
+
+        if research_plan is not None:
+            completed_queries = len(search_queries) - failed_queries
+            task_status = "success" if web_results else "failed"
+            task_state_payload = _append_chat_web_search_task_state(
+                db,
+                task_state_payload,
+                status=task_status,
+                summary=(
+                    f"深度研究完成 {completed_queries}/{len(search_queries)} 个维度，"
+                    f"汇总公开来源 {len(web_results)} 条"
+                ),
+                error_code="" if web_results else "DEEP_RESEARCH_NO_SOURCES",
+                source_count=len(web_results),
             )
-            log = WebSearchLog(
-                user_id=sso_user_id,
-                conversation_id=session.uuid,
-                query=body.question,
-                provider="duckduckgo-html",
-                status="ok" if web_results else "no_results",
-                result_count=len(web_results),
-                result_urls_json=[result.url for result in web_results],
-                used_urls_json=[result.url for result in web_results],
+            prepared_messages = [
+                MessageOut(
+                    role="system",
+                    content="\n\n".join([
+                        research_plan.system_instructions(),
+                        WebContextBuilder().build(web_results),
+                    ]),
+                ),
+                *prepared_messages,
+            ]
+        elif failed_queries:
+            task_state_payload = _append_chat_web_search_task_state(
+                db,
+                task_state_payload,
+                status="failed",
+                summary="联网搜索暂时不可用，已降级为普通回答",
+                error_code="WEB_SEARCH_FAILED",
+                source_count=0,
             )
-            db.add(log)
-            db.flush()
-            web_log_id = log.id
+        else:
             task_state_payload = _append_chat_web_search_task_state(
                 db,
                 task_state_payload,
@@ -910,30 +982,6 @@ def prepare_chat(
                 MessageOut(role="system", content=WebContextBuilder().build(web_results)),
                 *prepared_messages,
             ]
-        except Exception as exc:
-            error_message = str(exc)[:500]
-            log = WebSearchLog(
-                user_id=sso_user_id,
-                conversation_id=session.uuid,
-                query=body.question,
-                provider="duckduckgo-html",
-                status="failed",
-                result_count=0,
-                result_urls_json=[],
-                used_urls_json=[],
-                error_message=error_message,
-            )
-            db.add(log)
-            db.flush()
-            web_log_id = log.id
-            task_state_payload = _append_chat_web_search_task_state(
-                db,
-                task_state_payload,
-                status="failed",
-                summary="联网搜索暂时不可用，已降级为普通回答",
-                error_code="WEB_SEARCH_FAILED",
-                source_count=0,
-            )
     token_settings = settings or get_settings()
     ppt_context = resolve_chat_ppt_context(
         db,
@@ -983,7 +1031,7 @@ def prepare_chat(
             MessageOut(role="system", content=build_chat_ppt_system_message(ppt_context)),
             *prepared_messages,
         ]
-    if loop_result.completed_answer and ppt_context is None:
+    if loop_result.completed_answer and ppt_context is None and research_plan is None:
         assistant = _create_message(
             db,
             cipher,
@@ -999,9 +1047,9 @@ def prepare_chat(
             search_log_ids=loop_result.search_log_ids,
             answer_message_uuid=assistant.uuid,
         )
-        _link_web_search_log_to_answer(
+        _link_web_search_logs_to_answer(
             db,
-            log_id=web_log_id,
+            log_ids=web_log_ids,
             answer_message_uuid=assistant.uuid,
         )
         _create_chat_generated_files(
@@ -1061,9 +1109,9 @@ def prepare_chat(
         search_log_ids=loop_result.search_log_ids,
         answer_message_uuid=assistant.uuid,
     )
-    _link_web_search_log_to_answer(
+    _link_web_search_logs_to_answer(
         db,
-        log_id=web_log_id,
+        log_ids=web_log_ids,
         answer_message_uuid=assistant.uuid,
     )
     citations = [_citation_from_chunk(chunk) for chunk in loop_result.chunks]
@@ -1101,6 +1149,7 @@ def prepare_chat(
         routing_confidence=route.confidence,
         execution_mode=execution_decision.mode,
         execution_reason=execution_decision.reason,
+        research_plan=research_plan.public_payload() if research_plan is not None else None,
     )
 
 
@@ -1333,7 +1382,9 @@ def list_chat_sessions(
     sso_user_id: str,
     status: str = CHAT_SESSION_ACTIVE,
     project_uuid: str | None = None,
-) -> list[ChatSessionItemOut]:
+    page: int = 1,
+    page_size: int = 40,
+) -> tuple[list[ChatSessionItemOut], int]:
     filters = [
         ChatSession.status == status,
         ChatSession.workspace_type == ("project" if project_uuid else "personal"),
@@ -1345,10 +1396,15 @@ def list_chat_sessions(
             ChatSession.sso_user_id == sso_user_id,
             ChatSession.project_uuid.is_(None),
         ])
-    rows = list(db.scalars(select(ChatSession).where(*filters).order_by(
-        ChatSession.updated_at.desc(), ChatSession.id.desc()
-    )))
-    return [_session_item(row) for row in rows]
+    total = int(db.scalar(select(func.count(ChatSession.id)).where(*filters)) or 0)
+    rows = list(db.scalars(
+        select(ChatSession)
+        .where(*filters)
+        .order_by(ChatSession.updated_at.desc(), ChatSession.id.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+    ))
+    return [_session_item(row) for row in rows], total
 
 
 def get_chat_session_detail(

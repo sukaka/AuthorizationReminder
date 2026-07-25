@@ -1,4 +1,4 @@
-"""Unified Agent Run service (6.0 task base).
+"""Unified Agent Run service for the current 5.0 task contract.
 
 Product UI: 任务
 Technical: Run / Step / Event
@@ -13,6 +13,7 @@ from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from .agent_contracts import (
+    AgentArtifactContract,
     AgentEventContract,
     AgentEventType,
     AgentQualityContract,
@@ -41,6 +42,92 @@ class LeaseLostError(RuntimeError):
 
 def _utc_now() -> datetime:
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def _safe_positive_int(value: Any, default: int = 1) -> int:
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _normalized_artifact(
+    raw: Any,
+    *,
+    fallback_title: str,
+) -> AgentArtifactContract | None:
+    if not isinstance(raw, dict):
+        return None
+    artifact_id = str(raw.get("artifact_id") or raw.get("id") or "").strip()
+    if not artifact_id:
+        return None
+    artifact_format = str(
+        raw.get("format")
+        or raw.get("kind")
+        or raw.get("artifact_type")
+        or raw.get("type")
+        or ""
+    ).strip().lower()
+    artifact_type = str(raw.get("artifact_type") or raw.get("type") or artifact_format or "file")
+    download_ref = str(raw.get("download_ref") or raw.get("download_url") or "")
+    downloadable = bool(raw.get("downloadable", bool(download_ref)))
+    editable_default = artifact_format in {"markdown", "md"} or (
+        downloadable and artifact_format in {"html", "docx", "xlsx", "pptx"}
+    )
+    try:
+        return AgentArtifactContract(
+            artifact_id=artifact_id[:128],
+            artifact_type=artifact_type[:48],
+            title=str(
+                raw.get("title")
+                or raw.get("artifact_title")
+                or raw.get("file_name")
+                or fallback_title
+                or "成果"
+            )[:255],
+            status=str(raw.get("status") or "ready")[:24],
+            version=_safe_positive_int(raw.get("version")),
+            format=artifact_format[:48],
+            mime_type=str(raw.get("mime_type") or raw.get("media_type") or "")[:128],
+            download_ref=download_ref[:1024],
+            downloadable=downloadable,
+            editable=bool(raw.get("editable", editable_default)),
+        )
+    except Exception:
+        return None
+
+
+def _artifact_from_result(result: Any, *, fallback_title: str) -> AgentArtifactContract | None:
+    if not isinstance(result, dict):
+        return None
+    candidates = [result.get("artifact")]
+    artifacts = result.get("artifacts")
+    if isinstance(artifacts, list) and artifacts:
+        candidates.append(artifacts[0])
+    candidates.append(result)
+    for candidate in candidates:
+        artifact = _normalized_artifact(candidate, fallback_title=fallback_title)
+        if artifact is not None:
+            return artifact
+    return None
+
+
+def _next_action_for_status(status: str, checkpoint: Any) -> str:
+    if isinstance(checkpoint, dict):
+        explicit = str(checkpoint.get("next_action") or "").strip()
+        if explicit:
+            return explicit[:500]
+    if status in {"waiting_user", "waiting_confirmation"}:
+        return "请确认或补充信息后继续"
+    if status == "failed":
+        return "请检查失败原因后重试"
+    if status == "cancelled":
+        return "如仍需处理，可重新运行任务"
+    if status in {"succeeded", "completed"}:
+        return "可查看或下载任务成果"
+    if status in {"created", "queued"}:
+        return "等待系统开始处理"
+    return "任务正在处理中"
 
 
 class AgentRunService:
@@ -739,27 +826,36 @@ class AgentRunService:
                         )
                     except Exception:
                         continue
-            art_id = result.get("artifact_id")
-            if art_id:
-                from .agent_contracts import AgentArtifactContract
-
-                try:
-                    artifact = AgentArtifactContract(
-                        artifact_id=str(art_id)[:128],
-                        artifact_type=str(result.get("artifact_type") or "markdown")[:48],
-                        title=str(result.get("artifact_title") or row.title or "成果")[:255],
-                        status="ready",
-                        version=1,
-                    )
-                except Exception:
-                    artifact = None
+            artifact = _artifact_from_result(result, fallback_title=str(row.title or "成果"))
+        requires_user_action = status_enum in {
+            AgentRunStatus.WAITING_USER,
+            AgentRunStatus.WAITING_CONFIRMATION,
+        }
+        retry_allowed = status_enum in {
+            AgentRunStatus.FAILED,
+            AgentRunStatus.CANCELLED,
+        }
+        cancel_allowed = status_enum not in {
+            AgentRunStatus.SUCCEEDED,
+            AgentRunStatus.COMPLETED,
+            AgentRunStatus.FAILED,
+            AgentRunStatus.CANCELLED,
+        }
         return AgentRunContract(
             run_id=row.uuid,
+            conversation_id=str(row.conversation_id or "")[:64],
             title=str(row.title or "AI 任务")[:255],
             run_type=str(row.run_type or "chat")[:48],
             status=status_enum,
             stage=stage_enum,
             progress=int(row.progress or 0),
+            attempt=_safe_positive_int(row.attempt),
+            requires_user_action=requires_user_action,
+            next_action=_next_action_for_status(status_enum.value, row.checkpoint_json),
+            error_code=str(row.error_code or "")[:64],
+            error_message=str(row.error_message_safe or "")[:500],
+            retry_allowed=retry_allowed,
+            cancel_allowed=cancel_allowed,
             artifact=artifact,
             citations=citations,
             created_at=row.created_at,
@@ -781,17 +877,35 @@ class AgentRunService:
                 stage = AgentRunStage(event.stage)
             except ValueError:
                 stage = None
+        try:
+            event_type = AgentEventType(event.event_type)
+        except ValueError:
+            event_type = AgentEventType.STAGE
+        artifact_payload = event.artifact_json or {}
+        artifact = _normalized_artifact(
+            artifact_payload,
+            fallback_title=str(event.label or "任务成果"),
+        )
+        if event_type is AgentEventType.ARTIFACT and artifact is None:
+            # Historical rows may have used the artifact event name before the
+            # public artifact contract existed. Keep those details readable.
+            event_type = AgentEventType.STAGE
+        next_action = str(artifact_payload.get("next_action") or "")[:500]
+        if event_type is AgentEventType.WAITING_USER and not next_action:
+            next_action = str(event.content or event.label or "请补充信息后继续")[:500]
         return AgentEventContract(
             event_id=event.uuid,
             run_id=event.run_id,
             sequence=event.sequence,
-            event_type=AgentEventType(event.event_type),
+            event_type=event_type,
             stage=stage,
             label=event.label or "",
             progress=event.progress,
             content=event.content or "",
             source=source,
-            artifact_id=str((event.artifact_json or {}).get("artifact_id") or ""),
+            artifact_id=str(artifact_payload.get("artifact_id") or "")[:128],
+            artifact=artifact,
+            next_action=next_action,
             quality=quality,
         )
 
@@ -807,6 +921,10 @@ class AgentRunService:
             status=step.status,
             role=step.role or "",
             summary=summary,
+            attempt=_safe_positive_int(step.attempt),
+            retryable=step.status == "failed",
+            error_code=str(step.error_code or "")[:64],
+            error_message=str(step.error_message_safe or "")[:500],
         )
 
     def execute_faq_fast_path(self, row: AgentRun, input_text: str) -> bool:

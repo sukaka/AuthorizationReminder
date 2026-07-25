@@ -91,6 +91,8 @@ def _storage_subdir(usage_type: str) -> Path:
         return Path("knowledge") / "original"
     if usage_type == "session_attachment":
         return Path("user_uploads") / "session_attachments"
+    if usage_type == "skill_input":
+        return Path("user_uploads") / "skill_inputs"
     return Path("user_uploads") / "personal_references"
 
 

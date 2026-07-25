@@ -192,12 +192,14 @@ it('shows a knowledge governance board and filters risky files without duplicate
     })),
     http.get('/api/knowledge/files', () => HttpResponse.json({
       items: [
-        { ...baseFile, file_uuid: 'file-ready', file_name: '产品白皮书.pdf', status: 'READY', parse_status: 'ready', index_status: 'ready', chunk_count: 8, rag_enabled: true },
+        { ...baseFile, file_uuid: 'file-ready', file_name: '产品白皮书.pdf', status: 'READY', parse_status: 'parsed', index_status: 'indexed', chunk_count: 8, rag_enabled: true },
         { ...baseFile, file_uuid: 'file-failed', file_name: '解析失败.pdf', status: 'FAILED', parse_status: 'failed', index_status: 'failed', chunk_count: 0, rag_enabled: false },
-        { ...baseFile, file_uuid: 'file-pending', file_name: '待审核方案.pdf', status: 'READY', review_status: 'pending', parse_status: 'ready', index_status: 'ready', chunk_count: 3, rag_enabled: false },
-        { ...baseFile, file_uuid: 'file-rag-off', file_name: '未启用检索.pdf', status: 'READY', parse_status: 'ready', index_status: 'ready', chunk_count: 5, rag_enabled: false },
+        { ...baseFile, file_uuid: 'file-pending', file_name: '待审核方案.pdf', status: 'READY', review_status: 'pending', parse_status: 'parsed', index_status: 'indexed', chunk_count: 3, rag_enabled: false },
+        { ...baseFile, file_uuid: 'file-rag-off', file_name: '未启用检索.pdf', status: 'READY', parse_status: 'parsed', index_status: 'indexed', chunk_count: 5, rag_enabled: false },
+        { ...baseFile, file_uuid: 'file-duplicate-a', file_name: '重复资料 A.pdf', status: 'READY', parse_status: 'parsed', index_status: 'indexed', chunk_count: 4, rag_enabled: true, content_sha256: 'same-content' },
+        { ...baseFile, file_uuid: 'file-duplicate-b', file_name: '重复资料 B.pdf', status: 'READY', parse_status: 'parsed', index_status: 'indexed', chunk_count: 4, rag_enabled: true, content_sha256: 'same-content' },
       ],
-      total: 4,
+      total: 6,
     })),
     http.get('/api/knowledge/reviews/pending', () => HttpResponse.json({ items: [], total: 0 })),
     http.get('/api/knowledge/reviews/history', () => HttpResponse.json({
@@ -222,9 +224,16 @@ it('shows a knowledge governance board and filters risky files without duplicate
   expect(screen.getByText('解析失败')).toBeInTheDocument();
   expect(screen.getByText('未入检索')).toBeInTheDocument();
   expect(screen.getAllByText('待审核').length).toBeGreaterThan(0);
+  expect(screen.getByRole('button', { name: '只看未入检索 0' })).toBeInTheDocument();
+  expect(screen.getAllByText('存在相同内容')).toHaveLength(2);
 
   await userEvent.click(screen.getByRole('button', { name: '只看解析失败 1' }));
   expect(screen.getByText('解析失败.pdf')).toBeInTheDocument();
+  expect(screen.queryByText('产品白皮书.pdf')).not.toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole('button', { name: '只看重复内容 2' }));
+  expect(screen.getByText('重复资料 A.pdf')).toBeInTheDocument();
+  expect(screen.getByText('重复资料 B.pdf')).toBeInTheDocument();
   expect(screen.queryByText('产品白皮书.pdf')).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('button', { name: '只看待审核 1' }));
@@ -410,4 +419,99 @@ it('keeps external original-file delivery separate from external Q&A access', as
   })));
   expect(within(card).getByText('允许外部问答')).toBeInTheDocument();
   expect(within(card).getByText('允许外部发送原文件')).toBeInTheDocument();
+});
+
+it('shows knowledge version history and lets an admin restore a historical version', async () => {
+  const activateRequest = vi.fn();
+  const currentVersion = {
+    ...baseFile,
+    file_uuid: 'file-versioned-current',
+    file_name: '版本化制度v2.pdf',
+    status: 'READY',
+    parse_status: 'parsed',
+    index_status: 'indexed',
+    chunk_count: 6,
+    rag_enabled: true,
+    version: 2,
+    is_current_version: true,
+    updated_at: '2026-07-05T02:00:00Z',
+    content_sha256: 'b'.repeat(64),
+  };
+  const versionItems = [
+    {
+      file_uuid: 'file-versioned-current',
+      file_name: '版本化制度v2.pdf',
+      version: 2,
+      is_current_version: true,
+      review_status: 'official',
+      status: 'READY',
+      rag_enabled: true,
+      summary: '第二版',
+      created_at: '2026-07-05T02:00:00Z',
+      updated_at: '2026-07-05T02:00:00Z',
+      parent_file_id: 101,
+      replaced_by_file_id: null,
+    },
+    {
+      file_uuid: 'file-versioned-old',
+      file_name: '版本化制度v1.pdf',
+      version: 1,
+      is_current_version: false,
+      review_status: 'official',
+      status: 'READY',
+      rag_enabled: true,
+      summary: '第一版',
+      created_at: '2026-07-05T01:00:00Z',
+      updated_at: '2026-07-05T01:00:00Z',
+      parent_file_id: null,
+      replaced_by_file_id: 102,
+    },
+  ];
+  server.use(
+    http.get('/api/knowledge/categories', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/document-types', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/bases', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/pending', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/reviews/history', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/knowledge/files', () => HttpResponse.json({ items: [currentVersion], total: 1 })),
+    http.get('/api/ai/knowledge/files/file-versioned-current/versions', () => HttpResponse.json({
+      file_uuid: 'file-versioned-current',
+      items: versionItems,
+      effective_uuid: 'file-versioned-current',
+      total: 2,
+    })),
+    http.post('/api/ai/knowledge/files/file-versioned-old/versions/activate', async ({ request }) => {
+      activateRequest(await request.json());
+      return HttpResponse.json({
+        file_uuid: 'file-versioned-old',
+        items: versionItems.map((item) => ({
+          ...item,
+          is_current_version: item.file_uuid === 'file-versioned-old',
+        })),
+        effective_uuid: 'file-versioned-old',
+        total: 2,
+      });
+    }),
+  );
+
+  render(<KnowledgePage session={adminSession} />);
+
+  const card = await screen.findByRole('listitem', { name: '版本化制度v2.pdf' });
+  expect(within(card).getByText('v2')).toBeInTheDocument();
+  expect(within(card).getByText('当前生效')).toBeInTheDocument();
+  await userEvent.click(within(card).getByRole('button', { name: '更多操作 版本化制度v2.pdf' }));
+  await userEvent.click(within(card).getByRole('menuitem', { name: '版本记录 版本化制度v2.pdf' }));
+
+  const dialog = await screen.findByRole('dialog', { name: '版本记录 版本化制度v2.pdf' });
+  expect(within(dialog).getByText('v2 · 版本化制度v2.pdf')).toBeInTheDocument();
+  expect(within(dialog).getByText('v1 · 版本化制度v1.pdf')).toBeInTheDocument();
+  await userEvent.click(within(dialog).getByRole('button', {
+    name: '设为当前版本 版本化制度v1.pdf v1',
+  }));
+
+  await waitFor(() => expect(activateRequest).toHaveBeenCalledWith({ note: '' }));
+  const restoredItem = within(dialog).getByText('v1 · 版本化制度v1.pdf').closest('[role="listitem"]');
+  expect(restoredItem).not.toBeNull();
+  expect(within(restoredItem as HTMLElement).getByText('当前生效')).toBeInTheDocument();
+    expect(within(card).getAllByText('历史版本')).toHaveLength(2);
 });

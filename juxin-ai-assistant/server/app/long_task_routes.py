@@ -1,6 +1,6 @@
 import asyncio
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from typing import Annotated
@@ -102,11 +102,22 @@ async def list_long_tasks(
     session_payload: Annotated[SessionPayload, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=100),
 ) -> LongTaskListOut:
     await _require_use(request, session_payload, settings)
     service = _service(db, settings)
-    rows = service.list_for_owner(str(session_payload.user.id))
-    return LongTaskListOut(items=[service.public_out(row) for row in rows], total=len(rows))
+    rows, total = service.list_for_owner(
+        str(session_payload.user.id),
+        page=page,
+        page_size=page_size,
+    )
+    return LongTaskListOut(
+        items=[service.public_out(row) for row in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 @router.get("/{task_id}", response_model=LongTaskOut)

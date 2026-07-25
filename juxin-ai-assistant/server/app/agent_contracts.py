@@ -9,7 +9,7 @@ class _PublicContract(BaseModel):
 
 
 class AgentRunStatus(str, Enum):
-    """Public run lifecycle aligned with 6.0 master plan.
+    """Public run lifecycle aligned with the current 5.0 product contract.
 
     Product UI calls these "任务"; API/DB use run terminology.
     """
@@ -17,6 +17,7 @@ class AgentRunStatus(str, Enum):
     CREATED = "created"
     QUEUED = "queued"
     RUNNING = "running"
+    WAITING_USER = "waiting_user"
     WAITING_CONFIRMATION = "waiting_confirmation"
     PAUSED = "paused"
     RETRYING = "retrying"
@@ -44,6 +45,8 @@ class AgentEventType(str, Enum):
     DELTA = "delta"
     SOURCE = "source"
     REVIEW = "review"
+    WAITING_USER = "waiting_user"
+    ARTIFACT = "artifact"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -66,7 +69,11 @@ class AgentArtifactContract(_PublicContract):
     title: str = Field(min_length=1, max_length=255)
     status: str = Field(min_length=1, max_length=24)
     version: int = Field(default=1, ge=1)
+    format: str = Field(default="", max_length=48)
+    mime_type: str = Field(default="", max_length=128)
     download_ref: str = Field(default="", max_length=1024)
+    downloadable: bool = False
+    editable: bool = False
 
 
 class AgentQualityContract(_PublicContract):
@@ -76,11 +83,19 @@ class AgentQualityContract(_PublicContract):
 
 class AgentRunContract(_PublicContract):
     run_id: str = Field(min_length=1, max_length=64)
+    conversation_id: str = Field(default="", max_length=64)
     title: str = Field(default="AI 任务", max_length=255)
     run_type: str = Field(default="chat", max_length=48)
     status: AgentRunStatus
     stage: AgentRunStage
     progress: int = Field(default=0, ge=0, le=100)
+    attempt: int = Field(default=1, ge=1)
+    requires_user_action: bool = False
+    next_action: str = Field(default="", max_length=500)
+    error_code: str = Field(default="", max_length=64)
+    error_message: str = Field(default="", max_length=500)
+    retry_allowed: bool = False
+    cancel_allowed: bool = False
     artifact: AgentArtifactContract | None = None
     citations: list[AgentCitationContract] = Field(default_factory=list, max_length=200)
     created_at: datetime | None = None
@@ -95,6 +110,10 @@ class AgentStepContract(_PublicContract):
     status: str = Field(min_length=1, max_length=24)
     role: str = Field(default="", max_length=48)
     summary: str = Field(default="", max_length=2000)
+    attempt: int = Field(default=1, ge=1)
+    retryable: bool = False
+    error_code: str = Field(default="", max_length=64)
+    error_message: str = Field(default="", max_length=500)
 
 
 class AgentEventContract(_PublicContract):
@@ -108,6 +127,8 @@ class AgentEventContract(_PublicContract):
     content: str = Field(default="", max_length=20_000)
     source: AgentCitationContract | None = None
     artifact_id: str = Field(default="", max_length=128)
+    artifact: AgentArtifactContract | None = None
+    next_action: str = Field(default="", max_length=500)
     quality: AgentQualityContract | None = None
 
     @model_validator(mode="after")
@@ -116,4 +137,8 @@ class AgentEventContract(_PublicContract):
             raise ValueError("source_event_requires_source")
         if self.event_type is AgentEventType.DELTA and not self.content:
             raise ValueError("delta_event_requires_content")
+        if self.event_type is AgentEventType.ARTIFACT and self.artifact is None:
+            raise ValueError("artifact_event_requires_artifact")
+        if self.event_type is AgentEventType.WAITING_USER and not self.next_action:
+            raise ValueError("waiting_user_event_requires_next_action")
         return self

@@ -1,6 +1,7 @@
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import func, select
@@ -8,10 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .admin.route_common import write_request_audit
-from .auth import get_session, require_action
+from .auth import get_request_auth_token, get_session, require_action
 from .config import Settings, get_settings
 from .database import get_db
 from .project_access import (
+    PROJECT_MANAGER_ROLES,
     PROJECT_MEMBER_ROLES,
     require_project_access,
     require_project_manager,
@@ -76,6 +78,13 @@ class ProjectMemberOut(BaseModel):
     created_at: datetime
 
 
+class ProjectMemberCandidateOut(BaseModel):
+    user_id: str
+    username: str
+    role: str
+    department_code: str
+
+
 class ProjectOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -126,6 +135,59 @@ async def _require_ai_use(
         session_payload,
         current_settings,
     )
+
+
+async def _fetch_system_user_directory(
+    request: Request,
+    current_settings: Settings,
+) -> list[ProjectMemberCandidateOut]:
+    if current_settings.auth_dev_bypass:
+        return []
+    token, uses_bearer = get_request_auth_token(request, current_settings)
+    if not token:
+        raise HTTPException(status_code=401, detail="未登录")
+    try:
+        async with httpx.AsyncClient(
+            base_url=current_settings.auth_service_url,
+            timeout=current_settings.auth_fetch_timeout_ms / 1000,
+            cookies={current_settings.auth_cookie_name: token},
+            headers={"Authorization": f"Bearer {token}"} if uses_bearer else None,
+        ) as client:
+            response = await client.get(
+                "/api/auth/system-users",
+                params={"system": current_settings.auth_system_key},
+            )
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=503, detail="企业用户目录暂不可用") from exc
+    if response.status_code == 401:
+        raise HTTPException(status_code=401, detail="登录已过期")
+    if response.status_code == 403:
+        raise HTTPException(status_code=403, detail="无权限查看企业用户目录")
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail="企业用户目录查询失败")
+    try:
+        payload: Any = response.json()
+    except ValueError as exc:
+        raise HTTPException(status_code=502, detail="企业用户目录返回格式无效") from exc
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=502, detail="企业用户目录返回格式无效")
+    candidates: list[ProjectMemberCandidateOut] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            continue
+        user_id = str(item.get("id") or "").strip()
+        username = str(item.get("username") or "").strip()
+        if not user_id or not username:
+            continue
+        candidates.append(
+            ProjectMemberCandidateOut(
+                user_id=user_id,
+                username=username,
+                role=str(item.get("role") or "").strip(),
+                department_code=str(item.get("department_code") or "").strip(),
+            )
+        )
+    return candidates
 
 
 @router.get("", response_model=list[ProjectOut])
@@ -244,6 +306,40 @@ async def list_project_members(
     return [_member_out(member) for member in members]
 
 
+@router.get(
+    "/{project_uuid}/member-candidates",
+    response_model=list[ProjectMemberCandidateOut],
+)
+async def list_project_member_candidates(
+    project_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> list[ProjectMemberCandidateOut]:
+    await _require_ai_use(request, session_payload, current_settings)
+    project, current_member = require_project_access(
+        db,
+        project_uuid,
+        str(session_payload.user.id),
+    )
+    require_project_manager(current_member)
+    existing_user_ids = set(
+        db.scalars(
+            select(ProjectMember.user_id).where(
+                ProjectMember.project_id == project.id,
+                ProjectMember.status == "active",
+            )
+        ).all()
+    )
+    directory = await _fetch_system_user_directory(request, current_settings)
+    return [
+        candidate
+        for candidate in directory
+        if candidate.user_id not in existing_user_ids
+    ]
+
+
 @router.post(
     "/{project_uuid}/members",
     response_model=ProjectMemberOut,
@@ -266,6 +362,10 @@ async def add_project_member(
     require_project_manager(current_member)
     if body.role not in PROJECT_MEMBER_ROLES:
         raise HTTPException(status_code=422, detail="项目成员角色无效")
+    if not current_settings.auth_dev_bypass:
+        directory = await _fetch_system_user_directory(request, current_settings)
+        if body.user_id not in {candidate.user_id for candidate in directory}:
+            raise HTTPException(status_code=422, detail="请选择有效的企业用户")
     existing = db.scalar(
         select(ProjectMember).where(
             ProjectMember.project_id == project.id,

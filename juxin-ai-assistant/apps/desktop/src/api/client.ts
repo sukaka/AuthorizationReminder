@@ -147,10 +147,17 @@ export type SkillRunPayload = {
   tools_used: string[];
   result: Record<string, unknown>;
   artifacts: Array<{
+    artifact_id: string;
+    artifact_type: string;
     kind: string;
     title: string;
+    status: string;
+    version: number;
     content?: string;
     download_url?: string | null;
+    download_ref?: string;
+    downloadable: boolean;
+    editable: boolean;
     file_name?: string;
     format?: string;
     mime_type?: string;
@@ -928,16 +935,35 @@ export async function downloadWorkArtifactWord(downloadUrl: string): Promise<Wor
   return { kind: 'browser' };
 }
 
-/** 6.0 任务中心（Run）。 */
+/** 任务中心（Run）。 */
 export type AgentRunPayload = {
   run_id: string;
+  conversation_id?: string;
   title?: string;
   run_type?: string;
   status: string;
   stage: string;
   progress: number;
+  attempt?: number;
+  requires_user_action?: boolean;
+  next_action?: string;
+  error_code?: string;
+  error_message?: string;
+  retry_allowed?: boolean;
+  cancel_allowed?: boolean;
   citations?: Array<Record<string, unknown>>;
-  artifact?: Record<string, unknown> | null;
+  artifact?: {
+    artifact_id: string;
+    artifact_type: string;
+    title: string;
+    status: string;
+    version: number;
+    format?: string;
+    mime_type?: string;
+    download_ref?: string;
+    downloadable?: boolean;
+    editable?: boolean;
+  } | null;
   created_at?: string | null;
   updated_at?: string | null;
 };
@@ -952,6 +978,10 @@ export type AgentRunDetailPayload = {
     status: string;
     role: string;
     summary: string;
+    attempt?: number;
+    retryable?: boolean;
+    error_code?: string;
+    error_message?: string;
   }>;
   events: Array<{
     event_id: string;
@@ -964,6 +994,8 @@ export type AgentRunDetailPayload = {
     content: string;
     source?: Record<string, unknown> | null;
     artifact_id?: string;
+    artifact?: AgentRunPayload['artifact'];
+    next_action?: string;
     quality?: Record<string, unknown> | null;
   }>;
   result: Record<string, unknown>;
@@ -1013,6 +1045,15 @@ export async function cancelAgentRun(runId: string): Promise<AgentRunPayload> {
   );
 }
 
+export async function retryAgentRun(
+  runId: string,
+): Promise<{ run: AgentRunPayload; snapshot: Record<string, unknown> }> {
+  return readJson(
+    await apiFetch(`/api/ai/runs/${encodeURIComponent(runId)}/retry`, { method: 'POST' }),
+    'AGENT_RUN_RETRY_FAILED',
+  );
+}
+
 export async function postAgentRunFeedback(
   runId: string,
   payload: { feedback_type: string; comment?: string },
@@ -1028,7 +1069,7 @@ export async function postAgentRunFeedback(
   if (!response.ok) throw new ApiError(response.status, 'AGENT_RUN_FEEDBACK_FAILED');
 }
 
-/** 6.0 Agent artifact deliverable (Run 成果中心). */
+/** Current 5.0 Agent artifact deliverable (Run 成果中心). */
 export type AgentArtifactPayload = {
   artifact_id: string;
   run_id: string;
@@ -1615,6 +1656,73 @@ export async function runWorkflow(
       }),
     }),
     'WORKFLOW_RUN_FAILED',
+  );
+}
+
+export type WorkflowSchedulePayload = {
+  schedule_uuid: string;
+  owner_user_id: string;
+  workflow_id: string;
+  name: string;
+  cron_expression: string;
+  timezone: string;
+  enabled: boolean;
+  next_fire_at: string | null;
+  last_fire_at: string | null;
+  misfire_policy: string;
+  catch_up: boolean;
+  concurrency_policy: string;
+  idempotency_prefix: string;
+  metadata: Record<string, unknown>;
+};
+
+export async function listWorkflowSchedules(): Promise<{
+  items: WorkflowSchedulePayload[];
+  total: number;
+}> {
+  return readJson(
+    await apiFetch('/api/ai/workflows/schedules', { cache: 'no-store' }),
+    'WORKFLOW_SCHEDULES_LIST_FAILED',
+  );
+}
+
+export async function createWorkflowSchedule(payload: {
+  workflow_id: string;
+  name: string;
+  cron_expression: string;
+  timezone: string;
+  metadata: Record<string, unknown>;
+  misfire_policy?: 'skip' | 'fire_once';
+  catch_up?: boolean;
+  concurrency_policy?: 'forbid' | 'allow';
+  idempotency_prefix?: string;
+}): Promise<WorkflowSchedulePayload> {
+  return readJson(
+    await apiFetch('/api/ai/workflows/schedules', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        ...payload,
+        misfire_policy: payload.misfire_policy || 'skip',
+        catch_up: payload.catch_up || false,
+        concurrency_policy: payload.concurrency_policy || 'forbid',
+        idempotency_prefix: payload.idempotency_prefix || '',
+      }),
+    }),
+    'WORKFLOW_SCHEDULE_CREATE_FAILED',
+  );
+}
+
+export async function setWorkflowScheduleEnabled(
+  scheduleUuid: string,
+  enabled: boolean,
+): Promise<WorkflowSchedulePayload> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/workflows/schedules/${encodeURIComponent(scheduleUuid)}/${enabled ? 'enable' : 'disable'}`,
+      { method: 'POST' },
+    ),
+    enabled ? 'WORKFLOW_SCHEDULE_ENABLE_FAILED' : 'WORKFLOW_SCHEDULE_DISABLE_FAILED',
   );
 }
 

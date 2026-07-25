@@ -19,6 +19,13 @@ export type ProjectMemberPayload = {
   created_at: string;
 };
 
+export type ProjectMemberCandidatePayload = {
+  user_id: string;
+  username: string;
+  role: string;
+  department_code: string;
+};
+
 export type ProjectDetailPayload = ProjectPayload & {
   members: ProjectMemberPayload[];
 };
@@ -291,6 +298,13 @@ async function deleteJson(path: string, errorCode: string): Promise<void> {
 
 export async function listProjectMembers(projectUuid: string): Promise<ProjectMemberPayload[]> {
   return readJson(await apiFetch(projectPath(projectUuid, '/members'), { cache: 'no-store' }), 'PROJECT_MEMBERS_FAILED');
+}
+
+export async function listProjectMemberCandidates(projectUuid: string): Promise<ProjectMemberCandidatePayload[]> {
+  return readJson(
+    await apiFetch(projectPath(projectUuid, '/member-candidates'), { cache: 'no-store' }),
+    'PROJECT_MEMBER_CANDIDATES_FAILED',
+  );
 }
 
 export async function addProjectMember(

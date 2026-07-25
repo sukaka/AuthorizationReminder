@@ -49,6 +49,77 @@ def test_list_owned_can_filter_by_conversation(generation_db) -> None:
     assert [row.uuid for row in rows] == [current.uuid]
 
 
+def test_public_run_includes_origin_conversation(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(
+        owner_user_id="user-a",
+        input_text="需要返回原会话",
+        conversation_id="conversation-origin",
+    )
+    generation_db.commit()
+
+    payload = service.to_public_run(row)
+
+    assert payload.conversation_id == "conversation-origin"
+
+
+def test_public_run_exposes_waiting_and_failure_recovery_semantics(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(owner_user_id="user-a", input_text="需要补充信息")
+    row.status = "waiting_user"
+    row.checkpoint_json = {"next_action": "请补充客户名称后继续"}
+    generation_db.commit()
+
+    waiting = service.to_public_run(row)
+
+    assert waiting.requires_user_action is True
+    assert waiting.next_action == "请补充客户名称后继续"
+    assert waiting.cancel_allowed is True
+    assert waiting.retry_allowed is False
+
+    row.status = "failed"
+    row.stage = "failed"
+    row.error_code = "MODEL_TIMEOUT"
+    row.error_message_safe = "生成超时，请稍后重试"
+    generation_db.commit()
+
+    failed = service.to_public_run(row)
+
+    assert failed.requires_user_action is False
+    assert failed.retry_allowed is True
+    assert failed.cancel_allowed is False
+    assert failed.error_code == "MODEL_TIMEOUT"
+    assert failed.error_message == "生成超时，请稍后重试"
+
+
+def test_public_run_normalizes_artifact_delivery_metadata(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(owner_user_id="user-a", input_text="生成 PPT")
+    row.status = "succeeded"
+    row.stage = "completed"
+    row.progress = 100
+    row.result_json = {
+        "artifact_id": "artifact-pptx",
+        "artifact_type": "pptx",
+        "artifact_title": "客户汇报",
+        "format": "pptx",
+        "mime_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "download_url": "/api/artifacts/artifact-pptx/download",
+        "downloadable": True,
+        "editable": True,
+    }
+    generation_db.commit()
+
+    payload = service.to_public_run(row)
+
+    assert payload.artifact is not None
+    assert payload.artifact.artifact_id == "artifact-pptx"
+    assert payload.artifact.format == "pptx"
+    assert payload.artifact.downloadable is True
+    assert payload.artifact.editable is True
+    assert payload.next_action == "可查看或下载任务成果"
+
+
 def test_latest_chat_task_payload_restores_run_without_task_state(generation_db) -> None:
     service = AgentRunService(generation_db, _cipher())
     row = service.create_run(

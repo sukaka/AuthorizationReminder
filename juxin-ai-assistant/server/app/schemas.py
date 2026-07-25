@@ -215,6 +215,10 @@ class KnowledgeFileOut(BaseModel):
     status: str
     chunk_count: int
     created_at: datetime
+    updated_at: datetime | None = None
+    content_sha256: str = ""
+    version: int = 1
+    is_current_version: bool = True
     source_type: str = "user_upload"
     source_origin: str = "upload"
     web_capture_id: str = ""
@@ -516,6 +520,14 @@ class ChatTaskStateOut(BaseModel):
     stage_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
+class ChatResearchPlanOut(BaseModel):
+    objective: str
+    questions: list[str] = Field(default_factory=list)
+    source_scope: str
+    citation_policy: str
+    uncertainty_policy: str
+
+
 class ChatPrepareOut(BaseModel):
     session_uuid: str
     user_message_uuid: str
@@ -536,6 +548,7 @@ class ChatPrepareOut(BaseModel):
     routing_confidence: float = 1.0
     execution_mode: Literal["foreground", "background"] = "foreground"
     execution_reason: str = "普通问答使用前台流式输出"
+    research_plan: ChatResearchPlanOut | None = None
 
 
 class WebCapturePreviewIn(BaseModel):
@@ -790,6 +803,7 @@ class LongTaskOut(BaseModel):
     draft: str = ""
     error_code: str = ""
     error_message: str = ""
+    next_action: str = ""
     retry_allowed: bool = False
     cancel_allowed: bool = False
     created_at: datetime
@@ -799,6 +813,8 @@ class LongTaskOut(BaseModel):
 class LongTaskListOut(BaseModel):
     items: list[LongTaskOut]
     total: int
+    page: int = 1
+    page_size: int = 50
 
 
 class ServerModelStatusOut(BaseModel):
@@ -955,6 +971,8 @@ class ChatSessionItemOut(BaseModel):
 class ChatSessionListOut(BaseModel):
     items: list[ChatSessionItemOut]
     total: int
+    page: int = 1
+    page_size: int = 40
 
 
 class ChatSessionDetailOut(ChatSessionItemOut):

@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from .chat_research import is_deep_research_request
+
 
 ExecutionMode = Literal["foreground", "background"]
 
@@ -82,6 +84,11 @@ def decide_chat_execution(
         return ChatExecutionDecision(
             mode="foreground",
             reason="普通问答使用前台流式输出",
+        )
+    if is_deep_research_request(normalized):
+        return ChatExecutionDecision(
+            mode="background",
+            reason="深度研究默认在后台处理",
         )
     if any(marker in normalized for marker in _INFORMATION_MARKERS):
         return ChatExecutionDecision(

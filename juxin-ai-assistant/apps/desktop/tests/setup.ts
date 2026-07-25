@@ -43,6 +43,7 @@ afterEach(() => {
   cleanup();
   server.resetHandlers();
   localStorage.clear();
+  window.history.replaceState({}, '', '/');
   document.documentElement.removeAttribute('data-theme');
 });
 afterAll(() => server.close());
