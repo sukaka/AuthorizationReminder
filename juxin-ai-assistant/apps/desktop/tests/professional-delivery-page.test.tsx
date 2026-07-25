@@ -332,6 +332,7 @@ it('cancels a recoverable task while preserving its existing draft', async () =>
 
 it('renders a three-column deliverable workbench and saves an immutable version', async () => {
   const createVersion = vi.fn();
+  const onLocationChange = vi.fn();
   const detail = {
     request_id: 'req-detail',
     deliverable_uuid: 'deliverable-1',
@@ -466,11 +467,40 @@ it('renders a three-column deliverable workbench and saves an immutable version'
         creation_reason: 'professional_run',
         content_hash: 'hash-version-2',
         created_at: '2026-07-14T08:00:00Z',
+        is_current: true,
+      }, {
+        version_uuid: 'version-1',
+        version_no: 1,
+        change_summary: '创建初稿',
+        creation_reason: 'professional_run',
+        content_hash: 'hash-version-1',
+        created_at: '2026-07-14T07:00:00Z',
+        is_current: false,
       }],
-      total: 1,
+      total: 2,
       page: 1,
       page_size: 20,
     })),
+    http.get('/api/ai/deliverables/deliverable-1/diff', ({ request }) => {
+      const url = new URL(request.url);
+      expect(url.searchParams.get('from')).toBe('version-1');
+      expect(url.searchParams.get('to')).toBe('version-2');
+      return HttpResponse.json({
+        request_id: 'req-diff',
+        deliverable_uuid: 'deliverable-1',
+        from_version_uuid: 'version-1',
+        from_version_no: 1,
+        to_version_uuid: 'version-2',
+        to_version_no: 2,
+        summary: {
+          added_blocks: 1,
+          removed_blocks: 0,
+          modified_blocks: 0,
+          unchanged_blocks: 1,
+        },
+        changes: [],
+      });
+    }),
     http.get('/api/ai/deliverables/deliverable-1/versions/version-2/facts', () => HttpResponse.json({
       request_id: 'req-facts',
       deliverable_uuid: 'deliverable-1',
@@ -502,9 +532,20 @@ it('renders a three-column deliverable workbench and saves an immutable version'
     }),
   );
 
-  const { container } = render(<ProfessionalDeliverablesPage initialDeliverableId="deliverable-1" />);
+  const { container } = render(
+    <ProfessionalDeliverablesPage
+      initialDeliverableId="deliverable-1"
+      initialVersionId="version-1"
+      onLocationChange={onLocationChange}
+    />,
+  );
 
   expect(await screen.findByRole('heading', { name: detail.title })).toBeInTheDocument();
+  expect(await screen.findByRole('heading', { name: 'V1 → V2' })).toBeInTheDocument();
+  await waitFor(() => expect(onLocationChange).toHaveBeenCalledWith({
+    deliverableId: 'deliverable-1',
+    versionId: 'version-1',
+  }));
   const workbench = container.querySelector('.professional-delivery-layout');
   expect(workbench).toBeInTheDocument();
   expect(workbench?.children).toHaveLength(3);

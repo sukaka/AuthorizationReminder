@@ -359,33 +359,33 @@ test('formal deliverable passes review, approval, exact-version export, delivery
   await expect(page.locator('.professional-workbench-header [data-status="draft"]')).toHaveText('草稿');
 
   await page.getByRole('button', { name: '运行质量审阅' }).click();
-  await expect(page.getByRole('status')).toHaveText('质量审阅通过');
+  await expect(page.getByText('质量审阅通过', { exact: true })).toBeVisible();
   await expect(page.getByText('质量门禁通过')).toBeVisible();
   await expect(page.getByRole('button', { name: '提交审批' })).toBeEnabled();
 
   await page.getByRole('button', { name: '提交审批' }).click();
-  await expect(page.getByRole('status')).toHaveText('已提交审批');
+  await expect(page.getByText('已提交审批', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: '批准当前版本' })).toBeVisible();
 
   await page.getByRole('button', { name: '批准当前版本' }).click();
-  await expect(page.getByRole('status')).toHaveText('当前版本已批准');
+  await expect(page.getByText('当前版本已批准', { exact: true })).toBeVisible();
   await expect(page.locator('.professional-workbench-header [data-status="approved"]')).toHaveText('已批准');
 
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: '导出 Word' }).click();
   const download = await downloadPromise;
   expect(download.suggestedFilename()).toBe('安全运营月报-六月-V2.docx');
-  await expect(page.getByRole('status')).toHaveText('已导出 安全运营月报-六月-V2.docx');
+  await expect(page.getByText('已导出 安全运营月报-六月-V2.docx', { exact: true })).toBeVisible();
 
   await page.getByRole('tab', { name: '动态' }).click();
   await page.getByLabel('交付接收方').fill('信息安全委员会');
   await page.getByLabel('交付说明').fill('月度例会正式审阅材料');
   await page.getByRole('button', { name: '确认交付' }).click();
-  await expect(page.getByRole('status')).toHaveText('成果已交付并锁定交付版本');
+  await expect(page.getByText('成果已交付并锁定交付版本', { exact: true })).toBeVisible();
   await expect(page.locator('.professional-workbench-header [data-status="delivered"]')).toHaveText('已交付');
 
   await page.getByRole('button', { name: '归档交付成果' }).click();
-  await expect(page.getByRole('status')).toHaveText('成果已归档');
+  await expect(page.getByText('成果已归档', { exact: true })).toBeVisible();
   await expect(page.locator('.professional-workbench-header [data-status="archived"]')).toHaveText('已归档');
 
   expect(state.mutations).toEqual([

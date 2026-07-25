@@ -988,6 +988,8 @@ export function ChatPage({
   const [sessionTotal, setSessionTotal] = useState(0);
   const [sessionPage, setSessionPage] = useState(1);
   const [sessionLoadingMore, setSessionLoadingMore] = useState(false);
+  const [sessionSearch, setSessionSearch] = useState('');
+  const [sessionQuery, setSessionQuery] = useState('');
   const [projects, setProjects] = useState<ProjectPayload[]>([]);
   const [workspaceType, setWorkspaceType] = useState<'personal' | 'project'>(initialProjectUuid ? 'project' : 'personal');
   const [selectedProjectUuid, setSelectedProjectUuid] = useState(initialProjectUuid || '');
@@ -1063,10 +1065,18 @@ export function ChatPage({
     });
   }, [activeSessionUuid, projectUuid]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setSessionQuery(sessionSearch.trim());
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [sessionSearch]);
+
   const refreshSessions = async (kind: ChatSessionListKind = sessionListKind) => {
     const payload = await getChatSessionsByKind(kind, projectUuid, {
       page: 1,
       pageSize: chatSessionPageSize,
+      query: sessionQuery,
     });
     setSessions(payload.items);
     setSessionTotal(payload.total);
@@ -1083,6 +1093,7 @@ export function ChatPage({
       const payload = await getChatSessionsByKind(sessionListKind, projectUuid, {
         page: nextPage,
         pageSize: chatSessionPageSize,
+        query: sessionQuery,
       });
       setSessions((current) => {
         const knownIds = new Set(current.map((item) => item.session_uuid));
@@ -1209,7 +1220,7 @@ export function ChatPage({
         .then((payload) => setProfiles(Array.isArray(payload) ? payload : []))
         .catch(() => setProfiles([]));
     }
-  }, [projectUuid, sessionListKind, shouldUseServerModel]);
+  }, [projectUuid, sessionListKind, sessionQuery, shouldUseServerModel]);
 
   useEffect(() => {
     if (!shouldUseServerModel) return undefined;
@@ -2589,6 +2600,16 @@ export function ChatPage({
               </button>
             ))}
           </div>
+          <label className="chat-session-search">
+            <span className="sr-only">搜索历史任务</span>
+            <input
+              aria-label="搜索历史任务"
+              onChange={(event) => setSessionSearch(event.target.value)}
+              placeholder="搜索历史任务"
+              type="search"
+              value={sessionSearch}
+            />
+          </label>
           {sessionListKind !== 'trash' ? (
             <div className="chat-session-bulk-actions" aria-label="批量任务操作">
               <span>已选 {selectedSessionIds.length}</span>
@@ -2709,6 +2730,9 @@ export function ChatPage({
               </div>
             );
           })}
+          {!sessions.length && sessionQuery ? (
+            <p className="chat-sidebar-status">没有找到“{sessionQuery}”相关任务</p>
+          ) : null}
           {sessions.length < sessionTotal ? (
             <button
               className="chat-session-load-more"

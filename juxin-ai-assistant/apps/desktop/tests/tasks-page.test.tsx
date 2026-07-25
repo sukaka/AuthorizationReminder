@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -123,4 +123,56 @@ it('shows a safe failure reason and retries a recoverable task', async () => {
 
   expect(retryRequest).toHaveBeenCalledOnce();
   expect(await screen.findByText('任务已重新进入处理队列')).toBeInTheDocument();
+});
+
+it('searches and loads task history incrementally', async () => {
+  const requestedParameters: Array<{ query: string; offset: string }> = [];
+  server.use(
+    http.get('/api/ai/runs', ({ request }) => {
+      const url = new URL(request.url);
+      const query = url.searchParams.get('query') || '';
+      const offset = url.searchParams.get('offset') || '0';
+      requestedParameters.push({ query, offset });
+      if (query === '季度') {
+        return HttpResponse.json({
+          items: [{
+            run_id: 'run-quarterly',
+            title: '季度经营复盘',
+            status: 'succeeded',
+            stage: 'completed',
+            progress: 100,
+          }],
+          total: 1,
+        });
+      }
+      return HttpResponse.json({
+        items: offset === '0'
+          ? [{
+              run_id: 'run-page-one',
+              title: '第一页任务',
+              status: 'running',
+              stage: 'generating',
+              progress: 50,
+            }]
+          : [{
+              run_id: 'run-page-two',
+              title: '第二页任务',
+              status: 'succeeded',
+              stage: 'completed',
+              progress: 100,
+            }],
+        total: 2,
+      });
+    }),
+  );
+
+  render(<TasksPage />);
+
+  expect(await screen.findByText('第一页任务')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '加载更多（已显示 1 / 2）' }));
+  expect(await screen.findByText('第二页任务')).toBeInTheDocument();
+
+  await userEvent.type(screen.getByLabelText('搜索任务'), '季度');
+  expect(await screen.findByText('季度经营复盘')).toBeInTheDocument();
+  await waitFor(() => expect(requestedParameters).toContainEqual({ query: '季度', offset: '0' }));
 });

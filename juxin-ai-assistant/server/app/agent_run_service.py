@@ -232,21 +232,61 @@ class AgentRunService:
         owner_user_id: str,
         *,
         limit: int = 50,
+        offset: int = 0,
         status: str = "",
         conversation_id: str = "",
+        query: str = "",
     ) -> list[AgentRun]:
-        filters = [AgentRun.owner_user_id == owner_user_id]
-        if status.strip():
-            filters.append(AgentRun.status == status.strip())
-        if conversation_id.strip():
-            filters.append(AgentRun.conversation_id == conversation_id.strip())
+        filters = self._owned_filters(
+            owner_user_id,
+            status=status,
+            conversation_id=conversation_id,
+            query=query,
+        )
         stmt = (
             select(AgentRun)
             .where(*filters)
             .order_by(AgentRun.updated_at.desc(), AgentRun.id.desc())
+            .offset(max(0, int(offset)))
             .limit(max(1, min(int(limit), 200)))
         )
         return list(self.db.scalars(stmt))
+
+    def count_owned(
+        self,
+        owner_user_id: str,
+        *,
+        status: str = "",
+        conversation_id: str = "",
+        query: str = "",
+    ) -> int:
+        filters = self._owned_filters(
+            owner_user_id,
+            status=status,
+            conversation_id=conversation_id,
+            query=query,
+        )
+        return int(
+            self.db.scalar(select(func.count(AgentRun.id)).where(*filters)) or 0
+        )
+
+    @staticmethod
+    def _owned_filters(
+        owner_user_id: str,
+        *,
+        status: str = "",
+        conversation_id: str = "",
+        query: str = "",
+    ) -> list[Any]:
+        filters: list[Any] = [AgentRun.owner_user_id == owner_user_id]
+        if status.strip():
+            filters.append(AgentRun.status == status.strip())
+        if conversation_id.strip():
+            filters.append(AgentRun.conversation_id == conversation_id.strip())
+        normalized_query = query.strip().lower()
+        if normalized_query:
+            filters.append(func.lower(AgentRun.title).contains(normalized_query, autoescape=True))
+        return filters
 
     def decrypt_request(self, row: AgentRun) -> dict[str, Any]:
         return self.cipher.decrypt_json(

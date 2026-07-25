@@ -1382,6 +1382,7 @@ def list_chat_sessions(
     sso_user_id: str,
     status: str = CHAT_SESSION_ACTIVE,
     project_uuid: str | None = None,
+    query: str = "",
     page: int = 1,
     page_size: int = 40,
 ) -> tuple[list[ChatSessionItemOut], int]:
@@ -1396,6 +1397,9 @@ def list_chat_sessions(
             ChatSession.sso_user_id == sso_user_id,
             ChatSession.project_uuid.is_(None),
         ])
+    normalized_query = query.strip().lower()
+    if normalized_query:
+        filters.append(func.lower(ChatSession.title).contains(normalized_query, autoescape=True))
     total = int(db.scalar(select(func.count(ChatSession.id)).where(*filters)) or 0)
     rows = list(db.scalars(
         select(ChatSession)

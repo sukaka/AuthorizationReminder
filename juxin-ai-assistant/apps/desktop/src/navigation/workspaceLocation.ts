@@ -15,6 +15,7 @@ export const WORKSPACE_PAGES = [
   'learning',
   'models',
   'governance',
+  'audit',
   'department-stats',
   'suggestions',
 ] as const;
@@ -30,6 +31,7 @@ export type WorkspaceLocation = {
   artifactId: string;
   workflowId: string;
   deliverableId: string;
+  versionId: string;
   historyTab: HistoryLocationTab;
 };
 
@@ -49,6 +51,7 @@ export function readWorkspaceLocation(search: string): WorkspaceLocation {
   const artifactId = readId(params, 'artifact');
   const workflowId = readId(params, 'workflow');
   const deliverableId = readId(params, 'deliverable');
+  const versionId = readId(params, 'version');
   const requestedTab = params.get('tab');
   const historyTab: HistoryLocationTab = requestedTab === 'agent' || artifactId ? 'agent' : 'work';
 
@@ -70,6 +73,7 @@ export function readWorkspaceLocation(search: string): WorkspaceLocation {
     artifactId,
     workflowId,
     deliverableId,
+    versionId,
     historyTab,
   };
 }
@@ -90,6 +94,7 @@ export function buildWorkspaceSearch(location: WorkspaceLocation): string {
     params.set('workflow', location.workflowId);
   } else if (location.page === 'professional-deliverables' && location.deliverableId) {
     params.set('deliverable', location.deliverableId);
+    if (location.versionId) params.set('version', location.versionId);
   }
 
   const query = params.toString();

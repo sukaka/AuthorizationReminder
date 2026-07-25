@@ -62,6 +62,42 @@ PYTHON_BASE_IMAGE=python:3.12-slim docker compose --env-file ../.env \
 
 历史任务如果只保存了旧版 `ppt/index.html`，下载接口会保留该文件的兼容读取；所有新任务均只交付完整的 `presentation-html.zip`，不再交付无法离线渲染的单独 HTML 文件。
 
+## 真实验收
+
+不能只检查接口返回“成功”。每次安装、升级 Dashi 运行时或发布 AI 助手后，都应在实际运行环境生成并打开真实文件。
+
+在宿主机仓库中执行：
+
+```bash
+cd server
+python3 scripts/run_dashi_ppt_acceptance.py \
+  --runtime-root ../.local/dashi-ppt-upstream/skills/dashi-ppt/project \
+  --output-dir /tmp/juxin-dashi-acceptance
+```
+
+Docker 预发布环境可以直接在 API 容器内验收实际挂载的运行时：
+
+```bash
+docker compose --env-file ../.env \
+  -f ../docker-compose.yml \
+  -f docker-compose.ai-assistant-dashi-ppt.yml \
+  exec ai-assistant-api \
+  python3 scripts/run_dashi_ppt_acceptance.py \
+  --runtime-root /opt/dashi-ppt-runtime \
+  --output-dir /tmp/juxin-dashi-acceptance
+```
+
+命令会真实生成并检查：
+
+- `presentation-html.zip`：根目录包含 `index.html`、`assets/imported-theme-runtime.js`、字体和主题资源；
+- `presentation.pptx`：可以作为 Open XML 文件打开，页数与 `goal.json` 一致；
+- `presentation.pdf`：可以解析，页数与 `goal.json` 一致；
+- `acceptance-report.docx`：可以由 Word 解析并包含预期标题；
+- Dashi 官方 `validate:goal-copy` 和 `validate:swiss` 均通过；
+- 解压后的 `index.html` 在无网络依赖的浏览器环境中逐页激活，所有页面有正文且不出现“该页渲染失败，内容已跳过”。
+
+通过时会输出 `"passed": true`，并在输出目录保存 `acceptance-report.json` 和最后一页截图 `offline-last-slide.png`。任一产物缺失、页数不一致、官方校验失败或离线页面渲染失败，命令都会以非零状态退出，发布必须停止。
+
 ## 使用边界
 
 上游项目按其目录中的 LICENSE 使用：只能作为本 Dashi PPT Skill 的组成部分运行，不得单独提取、复制、再分发或用于其他产品。保留上游目录、许可证和锁文件，不把 `html-deck-to-pptx` 当作聚信 AI 助手的独立导出库。

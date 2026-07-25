@@ -46,7 +46,6 @@ const catalog = {
 type E2eState = {
   generationUuid: string;
   output: string;
-  deleted: boolean;
   feedback: string[];
   requestBodies: string[];
 };
@@ -218,34 +217,13 @@ async function mockApi(page: Page, state: E2eState) {
         uuid: 'feedback-e2e', generation_uuid: state.generationUuid, feedback_type: state.feedback.at(-1),
       } });
     }
-    if (path === '/api/ai/generations' && request.method() === 'GET') {
-      return route.fulfill({ json: { items: state.deleted || !state.generationUuid ? [] : [{
-        uuid: state.generationUuid, task_uuid: task.uuid, task_name: task.name,
-        assistant_code: 'sales', assistant_name: '销售助手', status: 'COMPLETED',
-        model_display_name: 'E2E 本地模型', model_id: 'e2e-model', prompt_version: 1,
-        latency_ms: 25, usage: {}, created_at: '2026-06-20T08:00:00Z', finished_at: '2026-06-20T08:00:01Z',
-      }], total: state.deleted ? 0 : 1 } });
-    }
-    if (path === `/api/ai/generations/${state.generationUuid}` && request.method() === 'GET') {
-      return route.fulfill({ json: {
-        uuid: state.generationUuid, task_uuid: task.uuid, task_name: task.name,
-        assistant_code: 'sales', assistant_name: '销售助手', status: 'COMPLETED',
-        model_display_name: 'E2E 本地模型', model_id: 'e2e-model', prompt_version: 1,
-        latency_ms: 25, usage: {}, created_at: '2026-06-20T08:00:00Z', finished_at: '2026-06-20T08:00:01Z',
-        input: { background: '密文解密后的输入' }, output: state.output, knowledge_refs: [],
-      } });
-    }
-    if (path === `/api/ai/generations/${state.generationUuid}` && request.method() === 'DELETE') {
-      state.deleted = true;
-      return route.fulfill({ status: 204, body: '' });
-    }
     return route.fulfill({ status: 404, json: { detail: `Unhandled ${request.method()} ${path}` } });
   });
 }
 
 test('employee completes the full local-model workflow without leaking its API key', async ({ page, context }) => {
   const state: E2eState = {
-    generationUuid: '', output: '', deleted: false, feedback: [], requestBodies: [],
+    generationUuid: '', output: '', feedback: [], requestBodies: [],
   };
   const networkPayloads: string[] = [];
   page.on('request', (request) => networkPayloads.push(`${request.url()}\n${request.postData() || ''}`));
@@ -254,15 +232,15 @@ test('employee completes the full local-model workflow without leaking its API k
   await mockApi(page, state);
 
   await page.goto('/');
-  await expect(page.getByText('上午好，端到端员工')).toBeVisible();
+  await expect(page.getByText('私人工作助理', { exact: true }).first()).toBeVisible();
   await page.getByRole('button', { name: '浅色' }).click();
   await page.screenshot({ path: 'output/playwright/home-light.png', fullPage: true });
   await page.getByRole('button', { name: '深色' }).click();
   await page.screenshot({ path: 'output/playwright/home-dark.png', fullPage: true });
 
-  await page.getByRole('button', { name: '全部助手', exact: true }).click();
+  await page.getByRole('button', { name: 'AI 能力', exact: true }).click();
   for (const name of assistantNames) await expect(page.getByRole('heading', { name })).toBeVisible();
-  await page.getByLabel('搜索助手或任务').fill('报价');
+  await page.getByLabel('搜索助手模式或任务').fill('报价');
   await expect(page.getByText('报价说明生成')).toBeVisible();
   await expect(page.getByText('培训考试助手')).toHaveCount(0);
   await page.getByRole('button', { name: '收藏 报价说明生成' }).click();
@@ -276,26 +254,17 @@ test('employee completes the full local-model workflow without leaking its API k
   await page.screenshot({ path: 'output/playwright/task-dark.png', fullPage: true });
   await page.getByRole('button', { name: '开始生成' }).click();
   await expect(page.getByRole('dialog', { name: '检测到敏感信息' })).toHaveCount(0);
-  await expect(page.getByText('# 报价说明\n已根据客户背景生成。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '报价说明', exact: true })).toBeVisible();
+  await expect(page.getByText('已根据客户背景生成。', { exact: true })).toBeVisible();
   await expect(page.getByText('结果已同步')).toBeVisible();
   await page.getByText('有帮助', { exact: true }).click();
   await page.getByRole('button', { name: '提交反馈' }).click();
   await expect.poll(() => state.feedback).toEqual(['USEFUL']);
   await page.getByRole('button', { name: '重新生成' }).click();
-  await expect(page.getByText('# 报价说明（新版）\n已重新生成。')).toBeVisible();
-
-  await page.getByRole('button', { name: '历史记录' }).click();
-  await expect(page.getByRole('button', { name: /报价说明生成/ })).toBeVisible();
-  await page.getByRole('button', { name: '浅色' }).click();
-  await page.screenshot({ path: 'output/playwright/history-light.png', fullPage: true });
-  await page.getByRole('button', { name: '深色' }).click();
-  await page.screenshot({ path: 'output/playwright/history-dark.png', fullPage: true });
-  await page.getByRole('button', { name: /报价说明生成/ }).click();
-  await expect(page.getByText('# 报价说明（新版）\n已重新生成。')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '报价说明（新版）', exact: true })).toBeVisible();
+  await expect(page.getByText('已重新生成。', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '复制全文' }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toContain('新版');
-  await page.getByRole('button', { name: '删除记录' }).click();
-  await expect(page.getByText('# 报价说明（新版）\n已重新生成。')).toHaveCount(0);
 
   expect(await page.evaluate(() => (window as any).__E2E_MODEL_PROCESS_INPUT__.apiKey)).toBe('e2e-model-process-secret');
   expect(networkPayloads.join('\n')).not.toContain('e2e-model-process-secret');

@@ -6441,6 +6441,20 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.chat-session-search {
+  margin: 0 16px;
+}
+
+.chat-session-search input {
+  width: 100%;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-solid);
+  color: var(--text-primary);
+}
+
 .chat-sessions button {
   width: calc(100% - 32px);
   margin: 0 16px;
@@ -8951,6 +8965,17 @@ textarea:focus-visible {
   color: var(--text-primary);
 }
 
+.task-create-row {
+  margin-bottom: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.task-create-row input {
+  min-width: 0;
+  flex: 1;
+}
+
 .history-layout {
   min-height: 520px;
   display: grid;
@@ -10171,6 +10196,71 @@ textarea:focus-visible {
     padding: 26px 20px 80px;
   }
 
+  .workspace:has(.chat-page) {
+    height: auto;
+    max-height: none;
+    padding: 0 14px 72px;
+    overflow: visible;
+  }
+
+  .chat-page {
+    height: auto;
+    overflow: visible;
+  }
+
+  .chat-shell {
+    height: auto;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+    overflow: visible;
+  }
+
+  .chat-sessions {
+    height: auto;
+    max-height: 320px;
+    padding: 12px 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chat-stage {
+    height: auto;
+    min-height: min(720px, calc(100vh - 120px));
+    padding-bottom: 0;
+    overflow: visible;
+  }
+
+  .chat-topbar {
+    position: static;
+    min-height: 0;
+    width: 100%;
+    margin: 0;
+  }
+
+  .chat-top-actions {
+    width: 100%;
+    overflow-x: auto;
+    justify-content: flex-start;
+    scrollbar-width: thin;
+  }
+
+  .chat-hero,
+  .chat-content-grid,
+  .chat-composer-wrap,
+  .chat-page.has-chat-content .chat-content-grid {
+    width: 100%;
+    margin-inline: 0;
+  }
+
+  .chat-page.has-chat-content .chat-content-grid {
+    margin-left: 0;
+    margin-right: 0;
+  }
+
+  .chat-content-grid {
+    overflow: visible;
+  }
+
   .workspace-section-tabs {
     margin-top: -6px;
     gap: 18px;
@@ -10245,6 +10335,25 @@ textarea:focus-visible {
 
   .history-detail {
     padding-left: 0;
+  }
+
+  .history-filters {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .history-filters input {
+    min-width: 0;
+    flex: 1 1 180px;
+  }
+
+  .task-create-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .task-create-row button {
+    width: 100%;
   }
 
   .task-card-list {

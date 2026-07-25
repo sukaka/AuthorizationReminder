@@ -1710,6 +1710,27 @@ def test_conversation_list_supports_stable_pagination(client_for_user) -> None:
     assert first_page_ids | second_page_ids == created_session_ids
 
 
+def test_conversation_list_supports_title_search(client_for_user) -> None:
+    client = client_for_user("conversation-search-owner")
+    matching = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "季度经营复盘", "mode": "normal"},
+    )
+    other = client.post(
+        "/api/ai/chat/prepare",
+        json={"question": "客户售前方案", "mode": "normal"},
+    )
+
+    assert matching.status_code == 201, matching.text
+    assert other.status_code == 201, other.text
+
+    response = client.get("/api/conversations?query=季度&page=1&page_size=40")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == 1
+    assert [item["title"] for item in response.json()["items"]] == ["季度经营复盘"]
+
+
 def test_conversation_archive_trash_restore_and_hard_delete_flow(
     client_for_user,
     generation_db,

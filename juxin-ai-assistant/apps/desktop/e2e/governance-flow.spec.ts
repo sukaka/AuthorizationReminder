@@ -25,6 +25,9 @@ async function mockGovernanceApi(page: Page, session: RoleSession) {
     if (path === '/api/ai/home') {
       return route.fulfill({ json: { favorites: [], recent_tasks: [], recent_generations: [], safety_reminders: [] } });
     }
+    if (path === '/api/ai/capabilities') {
+      return route.fulfill({ json: { items: [] } });
+    }
     if (session.role === 'employee' && path.startsWith('/api/ai/admin/')) {
       return route.fulfill({ status: 403, json: { detail: '仅管理员可执行' } });
     }
@@ -65,9 +68,9 @@ test('admin navigates governance and saves task configuration atomically', async
   await expect(page.getByRole('heading', { name: '任务管理' })).toBeVisible();
   await page.getByRole('button', { name: '刷新任务' }).click();
   await page.getByRole('button', { name: /销售总结/ }).click();
-  await expect(page.getByLabel('Prompt ID')).toHaveValue('88');
+  await expect(page.getByLabel('内容模板 ID')).toHaveValue('88');
   await page.getByRole('button', { name: '保存并验证' }).click();
-  await expect(page.getByText('任务、字段和 Prompt 绑定已保存。')).toBeVisible();
+  await expect(page.getByText('任务、字段和内容模板绑定已保存。')).toBeVisible();
   expect(requests.configurationSaveCount()).toBe(1);
   await expect(page.getByText('服务端模型配置')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '新增用户' })).toHaveCount(0);
@@ -83,19 +86,22 @@ test('admin navigates governance and saves task configuration atomically', async
   await page.setViewportSize({ width: 720, height: 960 });
   await expect(page.getByRole('navigation', { name: '治理导航' })).toBeVisible();
   await page.screenshot({ path: 'output/playwright/governance-admin-narrow.png', fullPage: true });
-  await page.getByRole('button', { name: '工作台' }).click();
-  await expect(page.getByText('上午好，治理管理员')).toBeVisible();
+  await page.getByRole('button', { name: '返回对话' }).click();
+  await expect(page.getByText('私人工作助理', { exact: true }).first()).toBeVisible();
 });
 
 test('manager is scoped to department data and suggestion entry', async ({ page }) => {
   await mockGovernanceApi(page, { role: 'employee', username: '销售负责人', managedDepartments: ['销售部'] });
   await page.goto('/');
-  await expect(page.getByRole('button', { name: '部门数据' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '提交建议' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '帮助与反馈' })).toBeVisible();
   await expect(page.getByRole('button', { name: '治理中心' })).toHaveCount(0);
+  await page.getByRole('button', { name: '企业洞察' }).click();
+  await expect(page.getByRole('button', { name: '部门数据' })).toBeVisible();
   await page.getByRole('button', { name: '部门数据' }).click();
   await page.getByRole('button', { name: '刷新统计' }).click();
   await expect(page.getByText('26')).toBeVisible();
+  await page.getByRole('button', { name: '帮助与反馈' }).click();
+  await expect(page.getByRole('heading', { name: '提交建议' })).toBeVisible();
 });
 
 test('auditor gets only the read-only audit entry', async ({ page }) => {
@@ -111,7 +117,7 @@ test('auditor gets only the read-only audit entry', async ({ page }) => {
 test('ordinary employee has no governance or department entry', async ({ page }) => {
   await mockGovernanceApi(page, { role: 'employee', username: '普通员工' });
   await page.goto('/');
-  await expect(page.getByText('上午好，普通员工')).toBeVisible();
+  await expect(page.getByText('私人工作助理', { exact: true }).first()).toBeVisible();
   await expect(page.getByRole('button', { name: '治理中心' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '部门数据' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '审计日志' })).toHaveCount(0);
@@ -119,4 +125,21 @@ test('ordinary employee has no governance or department entry', async ({ page })
     await fetch('/api/ai/admin/settings', { credentials: 'include' })
   ).status);
   expect(directStatus).toBe(403);
+});
+
+test('chat workspace remains usable without page overflow on narrow screens', async ({ page }) => {
+  await mockGovernanceApi(page, { role: 'employee', username: '移动端员工' });
+
+  for (const width of [320, 375, 768]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto('/');
+
+    await expect(page.getByRole('region', { name: '私人工作助理工作区' })).toBeVisible();
+    await expect(page.getByLabel('告诉我你想完成什么工作')).toBeVisible();
+    await expect(page.getByRole('button', { name: '发送' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => ({
+      clientWidth: document.documentElement.clientWidth,
+      scrollWidth: document.documentElement.scrollWidth,
+    }))).toEqual({ clientWidth: width, scrollWidth: width });
+  }
 });

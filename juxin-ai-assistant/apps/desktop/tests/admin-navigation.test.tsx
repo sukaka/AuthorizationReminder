@@ -192,7 +192,7 @@ it('hides admin-only entries from sysadmin users', async () => {
   expect(screen.queryByRole('button', { name: '审计日志' })).not.toBeInTheDocument();
 });
 
-it('hides department data and suggestions from non-admin department managers', async () => {
+it('shows scoped department data and suggestions to non-admin department managers', async () => {
   session('employee', ['销售部']);
   render(<App />);
 
@@ -203,9 +203,20 @@ it('hides department data and suggestions from non-admin department managers', a
   expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
   expect(within(mainNav).getByRole('button', { name: '知识与学习' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '部门数据' })).not.toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '提交建议' })).not.toBeInTheDocument();
+  await userEvent.click(within(mainNav).getByRole('button', { name: '企业洞察' }));
+  expect(screen.getByRole('button', { name: '部门数据' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '帮助与反馈' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
+});
+
+it('shows only the read-only audit entry to auditors', async () => {
+  session('auditor');
+  render(<App />);
+
+  expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '审计日志' })).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '治理中心' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '帮助与反馈' })).not.toBeInTheDocument();
 });
 
 it('keeps governance and manager entries hidden from ordinary employees', async () => {

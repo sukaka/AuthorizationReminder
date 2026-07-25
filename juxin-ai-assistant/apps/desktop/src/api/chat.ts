@@ -360,6 +360,20 @@ export type LongTaskPayload = {
   updated_at: string;
 };
 
+export type LongTaskNotificationPayload = {
+  notification_uuid: string;
+  task_id: string;
+  title: string;
+  conversation_id: string;
+  message_uuid: string;
+  task_status: 'completed' | 'failed' | 'waiting_user';
+  attempt: number;
+  unread: boolean;
+  replayed: boolean;
+  created_at: string;
+  read_at?: string | null;
+};
+
 type ChatGenerateStreamEvent =
   | { type: 'delta'; delta: string }
   | ({ type: 'complete' } & ChatGeneratePayload)
@@ -460,10 +474,11 @@ function projectQuery(projectUuid?: string): string {
 
 function paginatedProjectQuery(
   projectUuid?: string,
-  options: { page?: number; pageSize?: number } = {},
+  options: { page?: number; pageSize?: number; query?: string } = {},
 ): string {
   const params = new URLSearchParams();
   if (projectUuid) params.set('project_uuid', projectUuid);
+  if (options.query?.trim()) params.set('query', options.query.trim());
   params.set('page', String(options.page ?? 1));
   params.set('page_size', String(options.pageSize ?? 40));
   return `?${params.toString()}`;
@@ -472,7 +487,7 @@ function paginatedProjectQuery(
 export async function getChatSessionsByKind(
   kind: ChatSessionListKind,
   projectUuid?: string,
-  options: { page?: number; pageSize?: number } = {},
+  options: { page?: number; pageSize?: number; query?: string } = {},
 ): Promise<{
   items: ChatSessionPayload[];
   total: number;
@@ -618,6 +633,37 @@ export async function listLongTasks(
   return readJson(
     await apiFetch(`/api/ai/long-tasks?${params.toString()}`, { cache: 'no-store' }),
     'LONG_TASKS_FAILED',
+  );
+}
+
+export async function listLongTaskNotifications(
+  options: { unreadOnly?: boolean; limit?: number } = {},
+): Promise<{
+  items: LongTaskNotificationPayload[];
+  total: number;
+  unread_count: number;
+}> {
+  const params = new URLSearchParams({
+    unread_only: String(options.unreadOnly ?? true),
+    limit: String(options.limit ?? 20),
+  });
+  return readJson(
+    await apiFetch(`/api/ai/long-tasks/notifications?${params.toString()}`, {
+      cache: 'no-store',
+    }),
+    'LONG_TASK_NOTIFICATIONS_FAILED',
+  );
+}
+
+export async function markLongTaskNotificationRead(
+  notificationId: string,
+): Promise<LongTaskNotificationPayload> {
+  return readJson(
+    await apiFetch(
+      `/api/ai/long-tasks/notifications/${encodeURIComponent(notificationId)}/read`,
+      { method: 'POST' },
+    ),
+    'LONG_TASK_NOTIFICATION_READ_FAILED',
   );
 }
 

@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "聚信 AI 助手"
-    app_version: str = "5.9.0"
+    app_version: str = "5.11.0"
     environment: str = "development"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"

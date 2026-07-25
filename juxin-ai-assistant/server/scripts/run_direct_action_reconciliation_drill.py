@@ -11,8 +11,10 @@ recovery evidence.
 from __future__ import annotations
 
 import argparse
+import base64
 from datetime import UTC, datetime, timedelta
 import json
+import os
 from pathlib import Path
 import sys
 from typing import Any, Callable
@@ -23,7 +25,21 @@ if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
 
+def _configure_local_settings_defaults() -> None:
+    """Make the documented local-only drill runnable without deployment secrets."""
+    os.environ.setdefault("AUTH_DEV_BYPASS", "true")
+    os.environ.setdefault(
+        "AI_LOCAL_BINDING_SECRET",
+        "local-binding-secret-for-direct-action-drill",
+    )
+    if not os.environ.get("CONTENT_ENCRYPTION_KEY"):
+        os.environ["CONTENT_ENCRYPTION_KEY"] = base64.urlsafe_b64encode(
+            b"local-direct-action-drill-key-32b"
+        ).decode("ascii")
+
+
 def _new_session() -> tuple[Any, Any]:
+    _configure_local_settings_defaults()
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from sqlalchemy.pool import StaticPool

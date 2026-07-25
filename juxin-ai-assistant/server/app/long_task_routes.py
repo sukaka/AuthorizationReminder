@@ -11,7 +11,14 @@ from .crypto import ContentCipher
 from .database import SessionLocal, get_db
 from .long_tasks import LongTaskExecutor, LongTaskService
 from .models import LongTask
-from .schemas import LongTaskChatCreateIn, LongTaskListOut, LongTaskOut, SessionPayload
+from .schemas import (
+    LongTaskChatCreateIn,
+    LongTaskListOut,
+    LongTaskNotificationListOut,
+    LongTaskNotificationOut,
+    LongTaskOut,
+    SessionPayload,
+)
 
 
 router = APIRouter(prefix="/api/ai/long-tasks", tags=["long-tasks"])
@@ -118,6 +125,50 @@ async def list_long_tasks(
         page=page,
         page_size=page_size,
     )
+
+
+@router.get("/notifications", response_model=LongTaskNotificationListOut)
+async def list_long_task_notifications(
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+    unread_only: bool = Query(default=True),
+    limit: int = Query(default=20, ge=1, le=100),
+) -> LongTaskNotificationListOut:
+    await _require_use(request, session_payload, settings)
+    service = _service(db, settings)
+    rows, total, unread_count = service.list_notifications(
+        str(session_payload.user.id),
+        unread_only=unread_only,
+        limit=limit,
+    )
+    return LongTaskNotificationListOut(
+        items=[service.notification_out(row) for row in rows],
+        total=total,
+        unread_count=unread_count,
+    )
+
+
+@router.post(
+    "/notifications/{notification_id}/read",
+    response_model=LongTaskNotificationOut,
+)
+async def read_long_task_notification(
+    notification_id: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> LongTaskNotificationOut:
+    await _require_use(request, session_payload, settings)
+    service = _service(db, settings)
+    row, replayed = service.mark_notification_read(
+        notification_id,
+        owner_user_id=str(session_payload.user.id),
+    )
+    db.commit()
+    return service.notification_out(row, replayed=replayed)
 
 
 @router.get("/{task_id}", response_model=LongTaskOut)

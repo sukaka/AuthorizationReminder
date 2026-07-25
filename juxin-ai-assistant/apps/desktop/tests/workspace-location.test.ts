@@ -14,6 +14,12 @@ it('defaults unknown workspace locations to chat', () => {
   });
 });
 
+it('restores the read-only audit destination from a shareable location', () => {
+  expect(readWorkspaceLocation('?page=audit')).toMatchObject({
+    page: 'audit',
+  });
+});
+
 it('restores a project conversation from a shareable location', () => {
   expect(readWorkspaceLocation('?session=session-1&project=project-1')).toMatchObject({
     page: 'chat',
@@ -41,6 +47,7 @@ it('serializes only the focus fields used by the current page', () => {
     artifactId: 'artifact-hidden',
     workflowId: 'workflow-hidden',
     deliverableId: 'deliverable-hidden',
+    versionId: 'version-hidden',
     historyTab: 'agent',
   };
 
@@ -49,4 +56,24 @@ it('serializes only the focus fields used by the current page', () => {
     ...location,
     page: 'chat',
   })).toBe('?session=session-hidden&project=project-hidden');
+});
+
+it('restores and serializes a focused deliverable version', () => {
+  expect(readWorkspaceLocation('?deliverable=deliverable-1&version=version-2')).toMatchObject({
+    page: 'professional-deliverables',
+    deliverableId: 'deliverable-1',
+    versionId: 'version-2',
+  });
+
+  expect(buildWorkspaceSearch({
+    page: 'professional-deliverables',
+    sessionUuid: '',
+    projectUuid: '',
+    runId: '',
+    artifactId: '',
+    workflowId: '',
+    deliverableId: 'deliverable-1',
+    versionId: 'version-2',
+    historyTab: 'work',
+  })).toBe('?page=professional-deliverables&deliverable=deliverable-1&version=version-2');
 });

@@ -49,6 +49,38 @@ def test_list_owned_can_filter_by_conversation(generation_db) -> None:
     assert [row.uuid for row in rows] == [current.uuid]
 
 
+def test_list_owned_supports_title_search_offset_and_filtered_count(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    older = service.create_run(
+        owner_user_id="user-a",
+        input_text="第一项",
+        title="季度经营复盘",
+    )
+    service.create_run(
+        owner_user_id="user-a",
+        input_text="第二项",
+        title="普通任务",
+    )
+    newer = service.create_run(
+        owner_user_id="user-a",
+        input_text="第三项",
+        title="季度经营复盘续篇",
+    )
+    service.create_run(
+        owner_user_id="user-b",
+        input_text="其他用户任务",
+        title="季度经营复盘",
+    )
+    generation_db.commit()
+
+    first_page = service.list_owned("user-a", query="季度", limit=1)
+    second_page = service.list_owned("user-a", query="季度", offset=1, limit=1)
+
+    assert [row.uuid for row in first_page] == [newer.uuid]
+    assert [row.uuid for row in second_page] == [older.uuid]
+    assert service.count_owned("user-a", query="季度") == 2
+
+
 def test_public_run_includes_origin_conversation(generation_db) -> None:
     service = AgentRunService(generation_db, _cipher())
     row = service.create_run(

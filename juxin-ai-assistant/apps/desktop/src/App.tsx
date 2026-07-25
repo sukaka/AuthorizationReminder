@@ -29,6 +29,7 @@ import { WorkflowsPage } from './pages/WorkflowsPage';
 import { AgentHubPage } from './pages/AgentHubPage';
 import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
 import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
+import { AuditPage } from './pages/admin/AuditPage';
 import { GovernanceCenter } from './pages/admin/GovernanceCenter';
 import { StatsPage } from './pages/admin/StatsPage';
 import { SuggestionsPage } from './pages/admin/SuggestionsPage';
@@ -71,7 +72,7 @@ const taskDeliveryPages: WorkspacePage[] = [
 const aiCapabilityPages: WorkspacePage[] = ['assistants', 'workflows', 'skills', 'agent-hub'];
 const knowledgeLearningPages: WorkspacePage[] = ['knowledge', 'learning'];
 const enterpriseInsightPages: WorkspacePage[] = ['enterprise-overview', 'department-stats'];
-const managementPages: WorkspacePage[] = ['governance', 'enterprise-management'];
+const managementPages: WorkspacePage[] = ['governance', 'enterprise-management', 'audit'];
 
 type ViewState =
   | { kind: 'checking' }
@@ -117,6 +118,9 @@ function Workspace({ session }: { session: SessionPayload }) {
   const [focusProfessionalDeliverableId, setFocusProfessionalDeliverableId] = useState(
     initialLocationRef.current.deliverableId,
   );
+  const [focusProfessionalVersionId, setFocusProfessionalVersionId] = useState(
+    initialLocationRef.current.versionId,
+  );
   const [historyTab, setHistoryTab] = useState<'work' | 'agent'>(initialLocationRef.current.historyTab);
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('expanded');
   const [sidebarTouched, setSidebarTouched] = useState(false);
@@ -128,6 +132,10 @@ function Workspace({ session }: { session: SessionPayload }) {
   });
   const role = session.user.role.trim().toLowerCase();
   const isAdmin = isPlatformAdminRole(role);
+  const isDepartmentManager = session.scope.managedDepartments.length > 0;
+  const canViewDepartmentStats = isAdmin || isDepartmentManager;
+  const canSubmitSuggestion = isAdmin || isDepartmentManager;
+  const canReadAudit = isAdmin || role === 'auditor';
   const canManageEnterprise = isAdmin;
   const canViewEnterprise = !new Set(['external', 'external_customer', 'customer', 'visitor', 'guest']).has(role);
   const isWebRuntime = !window.__TAURI_INTERNALS__;
@@ -188,6 +196,8 @@ function Workspace({ session }: { session: SessionPayload }) {
                         ? '帮助与反馈'
                         : page === 'governance'
                           ? '治理中心'
+                          : page === 'audit'
+                            ? '审计日志'
                           : '任务处理';
 
   const taskDeliveryTabs: WorkspaceTab[] = [
@@ -208,11 +218,12 @@ function Workspace({ session }: { session: SessionPayload }) {
   ];
   const enterpriseInsightTabs: WorkspaceTab[] = [
     { page: 'enterprise-overview', label: '企业智能中枢' },
-    ...(isAdmin ? [{ page: 'department-stats' as const, label: '部门数据' }] : []),
+    ...(canViewDepartmentStats ? [{ page: 'department-stats' as const, label: '部门数据' }] : []),
   ];
   const managementTabs: WorkspaceTab[] = [
     ...(isAdmin ? [{ page: 'governance' as const, label: '治理中心' }] : []),
     ...(canManageEnterprise ? [{ page: 'enterprise-management' as const, label: '企业智能管理' }] : []),
+    ...(!isAdmin && canReadAudit ? [{ page: 'audit' as const, label: '审计日志' }] : []),
   ];
   const sectionNavigation = isTaskDeliveryPage
     ? { label: '任务与交付', tabs: taskDeliveryTabs }
@@ -241,6 +252,7 @@ function Workspace({ session }: { session: SessionPayload }) {
       setFocusArtifactId(location.artifactId);
       setFocusWorkflowId(location.workflowId);
       setFocusProfessionalDeliverableId(location.deliverableId);
+      setFocusProfessionalVersionId(location.versionId);
       setHistoryTab(location.historyTab);
     };
     window.addEventListener('popstate', restore);
@@ -257,6 +269,7 @@ function Workspace({ session }: { session: SessionPayload }) {
       artifactId: focusArtifactId,
       workflowId: focusWorkflowId,
       deliverableId: focusProfessionalDeliverableId,
+      versionId: focusProfessionalVersionId,
       historyTab,
     });
     const nextUrl = `${window.location.pathname}${search}${window.location.hash}`;
@@ -266,6 +279,7 @@ function Workspace({ session }: { session: SessionPayload }) {
   }, [
     focusArtifactId,
     focusProfessionalDeliverableId,
+    focusProfessionalVersionId,
     focusProjectUuid,
     focusRunId,
     focusSessionUuid,
@@ -285,17 +299,25 @@ function Workspace({ session }: { session: SessionPayload }) {
   }, [session.user.id]);
 
   useEffect(() => {
-    if (!isAdmin && (
-      page === 'department-stats'
-      || page === 'suggestions'
-      || page === 'governance'
-    )) {
+    if (
+      (page === 'department-stats' && !canViewDepartmentStats)
+      || (page === 'suggestions' && !canSubmitSuggestion)
+      || (page === 'governance' && !isAdmin)
+      || (page === 'audit' && !canReadAudit)
+    ) {
       setPage('chat');
     }
     if (!canManageEnterprise && page === 'enterprise-management') {
       setPage('chat');
     }
-  }, [canManageEnterprise, isAdmin, page]);
+  }, [
+    canManageEnterprise,
+    canReadAudit,
+    canSubmitSuggestion,
+    canViewDepartmentStats,
+    isAdmin,
+    page,
+  ]);
 
   const openTask = (nextTask: TaskPayload) => {
     setTask(nextTask);
@@ -362,8 +384,9 @@ function Workspace({ session }: { session: SessionPayload }) {
         </nav>
         <nav aria-label="管理与设置" className="sidebar-utility-nav">
           {canManageEnterprise ? <button aria-label="管理中心" title="管理中心" aria-current={isManagementPage ? 'page' : undefined} className={isManagementPage ? 'is-current' : ''} onClick={() => setPage(isAdmin ? 'governance' : 'enterprise-management')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">管理中心</span></button> : null}
+          {!isAdmin && canReadAudit ? <button aria-label="审计日志" title="审计日志" aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button"><span className="nav-icon" aria-hidden="true">▤</span><span className="nav-label">审计日志</span></button> : null}
           <button aria-label="设置" title="设置" aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
-          {isAdmin ? <button aria-label="帮助与反馈" title="帮助与反馈" aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">?</span><span className="nav-label">帮助与反馈</span></button> : null}
+          {canSubmitSuggestion ? <button aria-label="帮助与反馈" title="帮助与反馈" aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">?</span><span className="nav-label">帮助与反馈</span></button> : null}
         </nav>
         <div className="sidebar-foot">
           {capabilities.canUseAutoUpdater ? <WorkspaceUpdateControl /> : null}
@@ -462,16 +485,26 @@ function Workspace({ session }: { session: SessionPayload }) {
           <ProfessionalTasksPage
             onOpenDeliverable={(deliverableId) => {
               setFocusProfessionalDeliverableId(deliverableId);
+              setFocusProfessionalVersionId('');
               setPage('professional-deliverables');
             }}
           />
         ) : page === 'professional-deliverables' ? (
-          <ProfessionalDeliverablesPage initialDeliverableId={focusProfessionalDeliverableId} />
+          <ProfessionalDeliverablesPage
+            initialDeliverableId={focusProfessionalDeliverableId}
+            initialVersionId={focusProfessionalVersionId}
+            onLocationChange={({ deliverableId, versionId }) => {
+              setFocusProfessionalDeliverableId(deliverableId);
+              setFocusProfessionalVersionId(versionId);
+            }}
+          />
         ) : page === 'governance' && isAdmin ? (
           <GovernanceCenter session={session} />
-        ) : page === 'department-stats' && isAdmin ? (
+        ) : page === 'audit' && canReadAudit ? (
+          <AuditPage />
+        ) : page === 'department-stats' && canViewDepartmentStats ? (
           <StatsPage manager />
-        ) : page === 'suggestions' && isAdmin ? (
+        ) : page === 'suggestions' && canSubmitSuggestion ? (
           <SuggestionsPage departments={session.scope.managedDepartments} />
         ) : page === 'assistants' ? (
           <AssistantsPage onOpenTask={openTask} />

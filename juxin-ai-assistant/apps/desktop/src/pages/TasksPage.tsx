@@ -62,12 +62,16 @@ export function TasksPage({
   onOpenWorkflow,
 }: TasksPageProps = {}) {
   const [items, setItems] = useState<AgentRunPayload[]>([]);
+  const [total, setTotal] = useState(0);
   const [detail, setDetail] = useState<AgentRunDetailPayload | null>(null);
   const [statusFilter, setStatusFilter] = useState('');
+  const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [draft, setDraft] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   const openDetail = useCallback(async (runId: string, preserveNotice = false) => {
     setError('');
@@ -85,14 +89,43 @@ export function TasksPage({
     setLoading(true);
     setError('');
     try {
-      const payload = await listAgentRuns({ status: statusFilter, limit: 50 });
+      const payload = await listAgentRuns({ status: statusFilter, query, offset: 0, limit: 50 });
       setItems(payload.items || []);
+      setTotal(payload.total || 0);
     } catch (err) {
       setError(err instanceof ApiError ? err.code : '任务列表加载失败');
     } finally {
       setLoading(false);
     }
-  }, [statusFilter]);
+  }, [query, statusFilter]);
+
+  const loadMore = async () => {
+    if (loadingMore || items.length >= total) return;
+    setLoadingMore(true);
+    setError('');
+    try {
+      const payload = await listAgentRuns({
+        status: statusFilter,
+        query,
+        offset: items.length,
+        limit: 50,
+      });
+      setItems((current) => {
+        const knownIds = new Set(current.map((item) => item.run_id));
+        return current.concat(payload.items.filter((item) => !knownIds.has(item.run_id)));
+      });
+      setTotal(payload.total || 0);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.code : '加载更多任务失败');
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setQuery(search.trim()), 250);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   useEffect(() => {
     void refresh();
@@ -178,6 +211,13 @@ export function TasksPage({
           <p>查看后台任务进度、执行步骤、引用来源与交付结果。</p>
         </div>
         <div className="history-filters">
+          <input
+            aria-label="搜索任务"
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="搜索任务"
+            type="search"
+            value={search}
+          />
           <select
             aria-label="状态筛选"
             value={statusFilter}
@@ -196,9 +236,8 @@ export function TasksPage({
         </div>
       </header>
 
-      <div style={{ marginBottom: 16, display: 'flex', gap: 8 }}>
+      <div className="task-create-row">
         <input
-          style={{ flex: 1 }}
           placeholder="描述一项工作，例如：汇总方案生成验收报告"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
@@ -240,7 +279,21 @@ export function TasksPage({
               </span>
             </button>
           ))}
-          {!items.length && !loading ? <p className="empty-hint">还没有任务，可在上方发起。</p> : null}
+          {!items.length && !loading ? (
+            <p className="empty-hint">
+              {query ? `没有找到“${query}”相关任务。` : '还没有任务，可在上方发起。'}
+            </p>
+          ) : null}
+          {items.length < total ? (
+            <button
+              className="secondary-action"
+              disabled={loadingMore}
+              onClick={() => void loadMore()}
+              type="button"
+            >
+              {loadingMore ? '正在加载…' : `加载更多（已显示 ${items.length} / ${total}）`}
+            </button>
+          ) : null}
         </div>
 
         <article className="history-detail">

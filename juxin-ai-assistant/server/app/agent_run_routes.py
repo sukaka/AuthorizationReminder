@@ -148,6 +148,8 @@ async def list_runs(
     db: Annotated[Session, Depends(get_db)],
     status: Annotated[str, Query()] = "",
     conversation_id: Annotated[str, Query(max_length=64)] = "",
+    query: Annotated[str, Query(max_length=120)] = "",
+    offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> RunListOut:
     """任务中心：当前用户的 Run 列表（产品语言=任务）。"""
@@ -156,11 +158,19 @@ async def list_runs(
     rows = service.list_owned(
         str(session_payload.user.id),
         limit=limit,
+        offset=offset,
         status=status,
         conversation_id=conversation_id,
+        query=query,
     )
     items = [service.to_public_run(r) for r in rows]
-    return RunListOut(items=items, total=len(items))
+    total = service.count_owned(
+        str(session_payload.user.id),
+        status=status,
+        conversation_id=conversation_id,
+        query=query,
+    )
+    return RunListOut(items=items, total=total)
 
 
 @router.get("/{run_id}", response_model=RunDetailOut)

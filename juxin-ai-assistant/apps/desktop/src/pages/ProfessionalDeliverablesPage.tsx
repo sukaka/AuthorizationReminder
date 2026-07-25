@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { listProfessionalApprovalFlows, type ProfessionalApprovalFlow } from '../api/approvalFlows';
 import { ApiError, isSafeSameOriginUrl } from '../api/client';
@@ -72,6 +72,8 @@ import './professional-delivery.css';
 
 type ProfessionalDeliverablesPageProps = {
   initialDeliverableId?: string;
+  initialVersionId?: string;
+  onLocationChange?: (location: { deliverableId: string; versionId: string }) => void;
 };
 
 type RightPanel = 'facts' | 'review' | 'comments' | 'versions' | 'activity';
@@ -263,11 +265,16 @@ function displayValue(value: unknown): string {
   return JSON.stringify(value);
 }
 
-export function ProfessionalDeliverablesPage({ initialDeliverableId }: ProfessionalDeliverablesPageProps) {
+export function ProfessionalDeliverablesPage({
+  initialDeliverableId,
+  initialVersionId,
+  onLocationChange,
+}: ProfessionalDeliverablesPageProps) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const editorSurfaceRef = useRef<HTMLDivElement>(null);
   const docxInputRef = useRef<HTMLInputElement>(null);
   const mediaInputRef = useRef<HTMLInputElement>(null);
+  const restoredVersionRef = useRef('');
   const [deliverables, setDeliverables] = useState<DeliverableSummary[]>([]);
   const [selectedId, setSelectedId] = useState(initialDeliverableId ?? '');
   const [detail, setDetail] = useState<DeliverableDetail | null>(null);
@@ -332,6 +339,10 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
   const [mediaPreview, setMediaPreview] = useState<MediaPreviewState | null>(null);
   const [locatedBlockId, setLocatedBlockId] = useState<string | null>(null);
   const [pendingBlockDeletion, setPendingBlockDeletion] = useState<PendingBlockDeletion | null>(null);
+
+  useEffect(() => {
+    if (initialDeliverableId) setSelectedId(initialDeliverableId);
+  }, [initialDeliverableId]);
 
   useEffect(() => () => {
     if (mediaPreview?.sourceUrl.startsWith('blob:')) URL.revokeObjectURL(mediaPreview.sourceUrl);
@@ -1185,7 +1196,7 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
     }
   };
 
-  const compareVersion = async (version: DeliverableVersionHistoryItem) => {
+  const compareVersion = useCallback(async (version: DeliverableVersionHistoryItem) => {
     if (!detail) return;
     setBusyAction(`diff:${version.version_uuid}`);
     setError('');
@@ -1196,12 +1207,35 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
         detail.current_version.version_uuid,
       );
       setVersionDiff(payload);
+      onLocationChange?.({
+        deliverableId: detail.deliverable_uuid,
+        versionId: version.version_uuid,
+      });
     } catch (nextError: unknown) {
       setError(readableError(nextError, '版本比较失败'));
     } finally {
       setBusyAction('');
     }
-  };
+  }, [detail, onLocationChange]);
+
+  useEffect(() => {
+    const requestedVersionId = initialVersionId?.trim();
+    if (!detail || !requestedVersionId || !versions.length) return;
+    const restoreKey = `${detail.deliverable_uuid}:${requestedVersionId}`;
+    if (restoredVersionRef.current === restoreKey) return;
+    restoredVersionRef.current = restoreKey;
+    const requestedVersion = versions.find((version) => version.version_uuid === requestedVersionId);
+    if (!requestedVersion) {
+      onLocationChange?.({ deliverableId: detail.deliverable_uuid, versionId: '' });
+      return;
+    }
+    setRightPanel('versions');
+    if (requestedVersion.is_current || requestedVersion.version_uuid === detail.current_version.version_uuid) {
+      setVersionDiff(null);
+      return;
+    }
+    void compareVersion(requestedVersion);
+  }, [compareVersion, detail, initialVersionId, onLocationChange, versions]);
 
   const submitForApproval = async () => {
     if (!detail || !selectedFlowVersionUuid) {
@@ -1454,7 +1488,11 @@ export function ProfessionalDeliverablesPage({ initialDeliverableId }: Professio
               <button
                 className={item.deliverable_uuid === selectedId ? 'is-current' : ''}
                 key={item.deliverable_uuid}
-                onClick={() => setSelectedId(item.deliverable_uuid)}
+                onClick={() => {
+                  restoredVersionRef.current = '';
+                  setSelectedId(item.deliverable_uuid);
+                  onLocationChange?.({ deliverableId: item.deliverable_uuid, versionId: '' });
+                }}
                 type="button"
               >
                 <span data-status={item.lifecycle_status}>{statusLabels[item.lifecycle_status] ?? item.lifecycle_status}</span>

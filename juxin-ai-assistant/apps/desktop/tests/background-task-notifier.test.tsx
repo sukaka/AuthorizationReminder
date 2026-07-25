@@ -28,22 +28,48 @@ const runningTask = {
   updated_at: '2026-07-10T04:01:00Z',
 };
 
-it('notifies globally when a background task completes and opens its conversation', async () => {
-  let requestCount = 0;
+const completedNotification = {
+  notification_uuid: 'notification-completed',
+  task_id: 'long-report',
+  title: '客户合规解决方案 PPT',
+  conversation_id: 'session-completed',
+  message_uuid: 'assistant-completed',
+  task_status: 'completed' as const,
+  attempt: 1,
+  unread: true,
+  replayed: false,
+  created_at: '2026-07-10T04:02:00Z',
+  read_at: null,
+};
+
+it('restores a durable completion notification and opens its conversation', async () => {
   const activityChanges: BackgroundTaskActivity[] = [];
   const openConversation = vi.fn();
+  const markRead = vi.fn();
   server.use(
     http.get('/api/ai/long-tasks', () => {
-      requestCount += 1;
       return HttpResponse.json({
         items: [{
           ...runningTask,
-          status: requestCount === 1 ? 'running' : 'completed',
-          stage: requestCount === 1 ? 'generating' : 'completed',
-          progress: requestCount === 1 ? 60 : 100,
-          cancel_allowed: requestCount === 1,
+          status: 'completed',
+          stage: 'completed',
+          progress: 100,
+          cancel_allowed: false,
         }],
         total: 1,
+      });
+    }),
+    http.get('/api/ai/long-tasks/notifications', () => HttpResponse.json({
+      items: [completedNotification],
+      total: 1,
+      unread_count: 1,
+    })),
+    http.post('/api/ai/long-tasks/notifications/:notificationId/read', ({ params }) => {
+      markRead(params.notificationId);
+      return HttpResponse.json({
+        ...completedNotification,
+        unread: false,
+        read_at: '2026-07-10T04:03:00Z',
       });
     }),
   );
@@ -59,39 +85,54 @@ it('notifies globally when a background task completes and opens its conversatio
   );
 
   await waitFor(() => expect(activityChanges).toContainEqual({
-    activeCount: 1,
+    activeCount: 0,
     attentionCount: 0,
-    unreadCount: 0,
+    unreadCount: 1,
   }));
-  window.dispatchEvent(new Event('focus'));
 
   const notice = await screen.findByRole('status', { name: '后台任务完成' });
   expect(notice).toHaveTextContent('客户合规解决方案 PPT');
   await userEvent.click(within(notice).getByRole('button', { name: '查看结果' }));
 
   expect(openConversation).toHaveBeenCalledWith('session-completed');
+  expect(markRead).toHaveBeenCalledWith('notification-completed');
   expect(screen.queryByRole('status', { name: '后台任务完成' })).not.toBeInTheDocument();
   await waitFor(() => expect(activityChanges.at(-1)?.unreadCount).toBe(0));
 });
 
-it('routes failed background tasks to the task center', async () => {
-  let requestCount = 0;
+it('routes a durable failed-task notification to the task center', async () => {
   const openTasks = vi.fn();
   server.use(
     http.get('/api/ai/long-tasks', () => {
-      requestCount += 1;
       return HttpResponse.json({
         items: [{
           ...runningTask,
-          status: requestCount === 1 ? 'running' : 'failed',
-          error_code: requestCount === 1 ? '' : 'MODEL_FAILED',
-          error_message: requestCount === 1 ? '' : '服务暂时不可用',
-          retry_allowed: requestCount > 1,
-          cancel_allowed: requestCount === 1,
+          status: 'failed',
+          error_code: 'MODEL_FAILED',
+          error_message: '服务暂时不可用',
+          retry_allowed: true,
+          cancel_allowed: false,
         }],
         total: 1,
       });
     }),
+    http.get('/api/ai/long-tasks/notifications', () => HttpResponse.json({
+      items: [{
+        ...completedNotification,
+        notification_uuid: 'notification-failed',
+        task_status: 'failed',
+      }],
+      total: 1,
+      unread_count: 1,
+    })),
+    http.post('/api/ai/long-tasks/notifications/:notificationId/read', () =>
+      HttpResponse.json({
+        ...completedNotification,
+        notification_uuid: 'notification-failed',
+        task_status: 'failed',
+        unread: false,
+        read_at: '2026-07-10T04:03:00Z',
+      })),
   );
 
   render(
@@ -102,9 +143,6 @@ it('routes failed background tasks to the task center', async () => {
       taskCenterOpen={false}
     />,
   );
-
-  await waitFor(() => expect(requestCount).toBe(1));
-  window.dispatchEvent(new Event('focus'));
 
   const notice = await screen.findByRole('status', { name: '后台任务需要处理' });
   expect(notice).toHaveTextContent('客户合规解决方案 PPT');

@@ -1003,10 +1003,14 @@ export type AgentRunDetailPayload = {
 
 export async function listAgentRuns(filters: {
   status?: string;
+  query?: string;
+  offset?: number;
   limit?: number;
 } = {}): Promise<{ items: AgentRunPayload[]; total: number }> {
   const query = new URLSearchParams();
   if (filters.status) query.set('status', filters.status);
+  if (filters.query?.trim()) query.set('query', filters.query.trim());
+  if (filters.offset) query.set('offset', String(filters.offset));
   if (filters.limit) query.set('limit', String(filters.limit));
   const suffix = query.toString() ? `?${query.toString()}` : '';
   return readJson(await apiFetch(`/api/ai/runs${suffix}`, { cache: 'no-store' }), 'AGENT_RUNS_FAILED');

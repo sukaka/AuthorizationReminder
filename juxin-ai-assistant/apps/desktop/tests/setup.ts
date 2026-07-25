@@ -1,9 +1,16 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
+import { HttpResponse, http } from 'msw';
 import { afterAll, afterEach, beforeAll } from 'vitest';
 import { setupServer } from 'msw/node';
 
-export const server = setupServer();
+export const server = setupServer(
+  http.get('/api/ai/long-tasks/notifications', () => HttpResponse.json({
+    items: [],
+    total: 0,
+    unread_count: 0,
+  })),
+);
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();

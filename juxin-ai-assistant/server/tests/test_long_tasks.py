@@ -6,7 +6,7 @@ from sqlalchemy import select
 from app.config import get_settings
 from app.crypto import ContentCipher
 from app.long_tasks import LongTaskExecutor, LongTaskService
-from app.models import LongTask
+from app.models import LongTask, WorkflowNotificationOutbox
 from app.server_model_client import ServerModelStreamEvent
 
 
@@ -204,6 +204,26 @@ def test_executor_persists_streamed_draft_and_completes_chat(
     assert detail["draft"] == "第一段第二段"
     assert detail["next_action"] == "可打开完整结果"
     assert chat["messages"][-1]["content"] == "第一段第二段"
+    notification = generation_db.scalar(
+        select(WorkflowNotificationOutbox).where(
+            WorkflowNotificationOutbox.run_id == task["task_id"],
+        )
+    )
+    assert notification is not None
+    assert notification.payload_json["task_status"] == "completed"
+
+    service = LongTaskService(
+        generation_db,
+        ContentCipher(get_settings().content_encryption_key),
+    )
+    service.mark_completed(task["task_id"], owner_user_id="long-complete")
+    generation_db.commit()
+    notifications = list(generation_db.scalars(
+        select(WorkflowNotificationOutbox).where(
+            WorkflowNotificationOutbox.run_id == task["task_id"],
+        )
+    ))
+    assert len(notifications) == 1
 
 
 def test_executor_failure_keeps_partial_draft(
@@ -231,6 +251,60 @@ def test_executor_failure_keeps_partial_draft(
     assert detail["status"] == "failed"
     assert detail["draft"] == "已完成的草稿"
     assert detail["error_message"] == "任务执行失败，已保留当前草稿，可稍后重试"
+    notification = generation_db.scalar(
+        select(WorkflowNotificationOutbox).where(
+            WorkflowNotificationOutbox.run_id == task["task_id"],
+        )
+    )
+    assert notification is not None
+    assert notification.payload_json["task_status"] == "failed"
+
+
+def test_terminal_notification_is_owner_scoped_and_read_idempotently(
+    client_for_user,
+    generation_db,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("app.long_task_routes.dispatcher.enqueue", Mock())
+    owner = client_for_user("long-notification-owner")
+    other = client_for_user("long-notification-other")
+    task = _queue_chat(owner, _prepare_chat(owner)).json()
+    service = LongTaskService(
+        generation_db,
+        ContentCipher(get_settings().content_encryption_key),
+    )
+    service.mark_failed(
+        task["task_id"],
+        owner_user_id="long-notification-owner",
+        error_code="MODEL_FAILED",
+        error_message="服务暂时不可用",
+    )
+    generation_db.commit()
+
+    owner_list = owner.get("/api/ai/long-tasks/notifications")
+    other_list = other.get("/api/ai/long-tasks/notifications")
+    assert owner_list.status_code == 200
+    assert owner_list.json()["total"] == 1
+    assert owner_list.json()["unread_count"] == 1
+    assert other_list.status_code == 200
+    assert other_list.json()["total"] == 0
+
+    notification_id = owner_list.json()["items"][0]["notification_uuid"]
+    first_read = owner.post(
+        f"/api/ai/long-tasks/notifications/{notification_id}/read"
+    )
+    repeated_read = owner.post(
+        f"/api/ai/long-tasks/notifications/{notification_id}/read"
+    )
+    hidden_read = other.post(
+        f"/api/ai/long-tasks/notifications/{notification_id}/read"
+    )
+    assert first_read.status_code == 200
+    assert first_read.json()["unread"] is False
+    assert first_read.json()["replayed"] is False
+    assert repeated_read.status_code == 200
+    assert repeated_read.json()["replayed"] is True
+    assert hidden_read.status_code == 404
 
 
 def test_cancelling_running_executor_interrupts_external_stream(

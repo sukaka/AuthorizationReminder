@@ -179,6 +179,7 @@ async def chat_sessions(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    query: str = Query(default="", max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
@@ -194,6 +195,7 @@ async def chat_sessions(
         db,
         sso_user_id=user_id,
         project_uuid=project_uuid,
+        query=query,
         page=page,
         page_size=page_size,
     )
@@ -639,6 +641,7 @@ async def active_conversations(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    query: str = Query(default="", max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
@@ -650,6 +653,7 @@ async def active_conversations(
         sso_user_id=user_id,
         status="active",
         project_uuid=project_uuid,
+        query=query,
         page=page,
         page_size=page_size,
     )
@@ -687,6 +691,7 @@ async def archived_conversations(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    query: str = Query(default="", max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
@@ -698,6 +703,7 @@ async def archived_conversations(
         sso_user_id=user_id,
         status="archived",
         project_uuid=project_uuid,
+        query=query,
         page=page,
         page_size=page_size,
     )
@@ -711,6 +717,7 @@ async def trashed_conversations(
     current_settings: Annotated[Settings, Depends(get_settings)],
     db: Annotated[Session, Depends(get_db)],
     project_uuid: str | None = Query(default=None, max_length=64),
+    query: str = Query(default="", max_length=120),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=40, ge=1, le=100),
 ) -> ChatSessionListOut:
@@ -722,6 +729,7 @@ async def trashed_conversations(
         sso_user_id=user_id,
         status="deleted",
         project_uuid=project_uuid,
+        query=query,
         page=page,
         page_size=page_size,
     )

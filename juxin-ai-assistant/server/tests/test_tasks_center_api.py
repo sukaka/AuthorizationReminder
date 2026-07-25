@@ -14,6 +14,22 @@ def test_list_runs_api(generation_client) -> None:
     assert body["total"] >= 1
     assert any(i["run_id"] == run_id for i in body["items"])
     assert "title" in body["items"][0]
+
+    other = generation_client.post(
+        "/api/ai/runs",
+        json={"input_text": "准备会议纪要", "title": "会议纪要"},
+    )
+    assert other.status_code == 202, other.text
+    filtered = generation_client.get("/api/ai/runs?query=VPN&offset=0&limit=1")
+    assert filtered.status_code == 200, filtered.text
+    assert filtered.json()["total"] == 1
+    assert [item["run_id"] for item in filtered.json()["items"]] == [run_id]
+
+    second_page = generation_client.get("/api/ai/runs?offset=1&limit=1")
+    assert second_page.status_code == 200, second_page.text
+    assert second_page.json()["total"] >= 2
+    assert len(second_page.json()["items"]) == 1
+
     detail = generation_client.get(f"/api/ai/runs/{run_id}")
     assert detail.status_code == 200
     assert "result" in detail.json()

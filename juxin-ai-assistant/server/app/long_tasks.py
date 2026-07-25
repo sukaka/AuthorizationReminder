@@ -11,15 +11,23 @@ from sqlalchemy.orm import Session
 from .chat_service import complete_chat_message
 from .config import Settings
 from .crypto import ContentCipher, EncryptedPayload
-from .models import ChatMessage, ChatSession, LongTask
+from .models import ChatMessage, ChatSession, LongTask, WorkflowNotificationOutbox
 from .model_endpoint_security import validate_user_model_endpoint
-from .schemas import ChatCompleteIn, LongTaskChatCreateIn, LongTaskOut
+from .schemas import (
+    ChatCompleteIn,
+    LongTaskChatCreateIn,
+    LongTaskNotificationOut,
+    LongTaskOut,
+)
 from .server_model_client import ModelRequestConfig, ServerModelStreamEvent, stream_with_model_config
 from .user_model_profiles import decrypt_user_model_api_key, get_default_user_model_profile
+from .workflow_control import enqueue_notification
 
 
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 RUNNING_STATUSES = {"queued", "running", "retrying"}
+LONG_TASK_NOTIFICATION_SOURCE = "long_task"
+LONG_TASK_NOTIFICATION_NODE = "long_task.terminal"
 
 
 class LongTaskService:
@@ -107,6 +115,65 @@ class LongTaskService:
         ))
         return rows, total
 
+    def list_notifications(
+        self,
+        owner_user_id: str,
+        *,
+        unread_only: bool = True,
+        limit: int = 20,
+    ) -> tuple[list[WorkflowNotificationOutbox], int, int]:
+        base_conditions = (
+            WorkflowNotificationOutbox.owner_user_id == owner_user_id,
+            WorkflowNotificationOutbox.channel == "in_app",
+            WorkflowNotificationOutbox.payload_json["source"].as_string()
+            == LONG_TASK_NOTIFICATION_SOURCE,
+        )
+        unread_condition = WorkflowNotificationOutbox.read_at.is_(None)
+        conditions = (*base_conditions, unread_condition) if unread_only else base_conditions
+        total = int(self.db.scalar(
+            select(func.count(WorkflowNotificationOutbox.id)).where(*conditions)
+        ) or 0)
+        unread_count = int(self.db.scalar(
+            select(func.count(WorkflowNotificationOutbox.id)).where(
+                *base_conditions,
+                unread_condition,
+            )
+        ) or 0)
+        rows = list(self.db.scalars(
+            select(WorkflowNotificationOutbox)
+            .where(*conditions)
+            .order_by(
+                WorkflowNotificationOutbox.created_at.desc(),
+                WorkflowNotificationOutbox.id.desc(),
+            )
+            .limit(limit)
+        ))
+        return rows, total, unread_count
+
+    def mark_notification_read(
+        self,
+        notification_uuid: str,
+        *,
+        owner_user_id: str,
+    ) -> tuple[WorkflowNotificationOutbox, bool]:
+        row = self.db.scalar(
+            select(WorkflowNotificationOutbox).where(
+                WorkflowNotificationOutbox.uuid == notification_uuid,
+                WorkflowNotificationOutbox.owner_user_id == owner_user_id,
+                WorkflowNotificationOutbox.channel == "in_app",
+                WorkflowNotificationOutbox.payload_json["source"].as_string()
+                == LONG_TASK_NOTIFICATION_SOURCE,
+            )
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="后台任务提醒不存在")
+        replayed = row.read_at is not None
+        if not replayed:
+            row.read_at = datetime.now(UTC).replace(tzinfo=None)
+            row.read_by_user_id = owner_user_id
+            self.db.flush()
+        return row, replayed
+
     def get(self, task_id: str, *, owner_user_id: str | None = None) -> LongTask:
         conditions = [LongTask.uuid == task_id]
         if owner_user_id is not None:
@@ -136,6 +203,7 @@ class LongTaskService:
         row = self.get(task_id, owner_user_id=owner_user_id)
         if row.status != "failed":
             raise HTTPException(status_code=409, detail="当前任务不可重试")
+        self._mark_task_notifications_read(row, owner_user_id=owner_user_id)
         row.status = "retrying"
         row.stage = str((row.checkpoint_json or {}).get("stage") or "queued")
         row.progress = max(0, min(row.progress, 95))
@@ -150,6 +218,27 @@ class LongTaskService:
         }
         self.db.flush()
         return row
+
+    def _mark_task_notifications_read(
+        self,
+        row: LongTask,
+        *,
+        owner_user_id: str,
+    ) -> None:
+        notifications = self.db.scalars(
+            select(WorkflowNotificationOutbox).where(
+                WorkflowNotificationOutbox.owner_user_id == owner_user_id,
+                WorkflowNotificationOutbox.run_id == row.uuid,
+                WorkflowNotificationOutbox.channel == "in_app",
+                WorkflowNotificationOutbox.payload_json["source"].as_string()
+                == LONG_TASK_NOTIFICATION_SOURCE,
+                WorkflowNotificationOutbox.read_at.is_(None),
+            )
+        )
+        read_at = datetime.now(UTC).replace(tzinfo=None)
+        for notification in notifications:
+            notification.read_at = read_at
+            notification.read_by_user_id = owner_user_id
 
     def mark_running(self, task_id: str, *, owner_user_id: str) -> LongTask:
         row = self.get(task_id, owner_user_id=owner_user_id)
@@ -210,6 +299,7 @@ class LongTaskService:
             "next_action": "请检查失败原因后重试",
         }
         self.db.flush()
+        self._enqueue_terminal_notification(row)
         return row
 
     def mark_completed(self, task_id: str, *, owner_user_id: str) -> LongTask:
@@ -226,7 +316,30 @@ class LongTaskService:
             "next_action": "可打开完整结果",
         }
         self.db.flush()
+        self._enqueue_terminal_notification(row)
         return row
+
+    def _enqueue_terminal_notification(self, row: LongTask) -> None:
+        if row.status not in {"completed", "failed", "waiting_user"}:
+            return
+        enqueue_notification(
+            self.db,
+            owner_user_id=row.owner_user_id,
+            run_id=row.uuid,
+            node_id=LONG_TASK_NOTIFICATION_NODE,
+            idempotency_key=f"terminal:{row.status}:attempt:{row.attempt}",
+            channel="in_app",
+            recipient=row.owner_user_id,
+            payload={
+                "source": LONG_TASK_NOTIFICATION_SOURCE,
+                "task_id": row.uuid,
+                "title": row.title,
+                "conversation_id": row.conversation_id,
+                "message_uuid": row.message_id,
+                "task_status": row.status,
+                "attempt": row.attempt,
+            },
+        )
 
     def request_payload(self, row: LongTask) -> dict[str, Any]:
         return self.cipher.decrypt_json(
@@ -263,6 +376,27 @@ class LongTaskService:
             cancel_allowed=row.status in RUNNING_STATUSES,
             created_at=row.created_at,
             updated_at=row.updated_at,
+        )
+
+    @staticmethod
+    def notification_out(
+        row: WorkflowNotificationOutbox,
+        *,
+        replayed: bool = False,
+    ) -> LongTaskNotificationOut:
+        payload = dict(row.payload_json or {})
+        return LongTaskNotificationOut(
+            notification_uuid=row.uuid,
+            task_id=str(payload.get("task_id") or row.run_id),
+            title=str(payload.get("title") or "后台任务"),
+            conversation_id=str(payload.get("conversation_id") or ""),
+            message_uuid=str(payload.get("message_uuid") or ""),
+            task_status=str(payload.get("task_status") or "failed"),
+            attempt=max(1, int(payload.get("attempt") or 1)),
+            unread=row.read_at is None,
+            replayed=replayed,
+            created_at=row.created_at,
+            read_at=row.read_at,
         )
 
 

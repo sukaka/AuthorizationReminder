@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
-import { listLongTasks, type LongTaskPayload } from '../api/chat';
+import {
+  listLongTaskNotifications,
+  listLongTasks,
+  markLongTaskNotificationRead,
+  type LongTaskNotificationPayload,
+  type LongTaskPayload,
+} from '../api/chat';
 
 export type BackgroundTaskActivity = {
   activeCount: number;
@@ -10,7 +16,7 @@ export type BackgroundTaskActivity = {
 
 type BackgroundTaskNotice = {
   kind: 'completed' | 'attention';
-  task: LongTaskPayload;
+  notification: LongTaskNotificationPayload;
 };
 
 type BackgroundTaskNotifierProps = {
@@ -37,8 +43,8 @@ export function BackgroundTaskNotifier({
     attentionCount: 0,
     unreadCount: 0,
   });
-  const initializedRef = useRef(false);
-  const statusByTaskRef = useRef(new Map<string, LongTaskPayload['status']>());
+  const dismissedNotificationIdsRef = useRef(new Set<string>());
+  const refreshInFlightRef = useRef(false);
   const activityCallbackRef = useRef(onActivityChange);
 
   useEffect(() => {
@@ -49,48 +55,53 @@ export function BackgroundTaskNotifier({
     activityCallbackRef.current?.(activity);
   }, [activity]);
 
-  const dismissNotice = useCallback(() => {
+  const dismissNotice = useCallback((target: BackgroundTaskNotice | null = notice) => {
+    if (!target) return;
+    dismissedNotificationIdsRef.current.add(target.notification.notification_uuid);
     setNotice(null);
     setActivity((current) => (
-      current.unreadCount ? { ...current, unreadCount: 0 } : current
+      current.unreadCount
+        ? { ...current, unreadCount: Math.max(0, current.unreadCount - 1) }
+        : current
     ));
-  }, []);
+    markLongTaskNotificationRead(target.notification.notification_uuid).catch(() => undefined);
+  }, [notice]);
 
   const refresh = useCallback(async () => {
-    const payload = await listLongTasks();
-    const previousStatuses = statusByTaskRef.current;
-    let nextNotice: BackgroundTaskNotice | null = null;
-
-    if (initializedRef.current) {
-      const changedTask = payload.items.find((task) => {
-        const previousStatus = previousStatuses.get(task.task_id);
-        if (!previousStatus || previousStatus === task.status) return false;
-        return task.status === 'completed' || attentionStatuses.has(task.status);
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    try {
+      const [taskPayload, notificationPayload] = await Promise.all([
+        listLongTasks(),
+        listLongTaskNotifications({ unreadOnly: true }),
+      ]);
+      const visibleNotifications = notificationPayload.items.filter(
+        (item) => !dismissedNotificationIdsRef.current.has(item.notification_uuid),
+      );
+      const nextNotification = visibleNotifications[0] ?? null;
+      setActivity({
+        activeCount: taskPayload.items.filter((task) => activeStatuses.has(task.status)).length,
+        attentionCount: taskPayload.items.filter((task) => attentionStatuses.has(task.status)).length,
+        unreadCount: Math.max(
+          0,
+          notificationPayload.unread_count
+            - notificationPayload.items.filter((item) => (
+              dismissedNotificationIdsRef.current.has(item.notification_uuid)
+            )).length,
+        ),
       });
-      if (changedTask) {
-        nextNotice = {
-          kind: changedTask.status === 'completed' ? 'completed' : 'attention',
-          task: changedTask,
-        };
-      }
+      setNotice(nextNotification ? {
+        kind: nextNotification.task_status === 'completed' ? 'completed' : 'attention',
+        notification: nextNotification,
+      } : null);
+    } finally {
+      refreshInFlightRef.current = false;
     }
-
-    statusByTaskRef.current = new Map(
-      payload.items.map((task) => [task.task_id, task.status] as const),
-    );
-    initializedRef.current = true;
-    setActivity((current) => ({
-      activeCount: payload.items.filter((task) => activeStatuses.has(task.status)).length,
-      attentionCount: payload.items.filter((task) => attentionStatuses.has(task.status)).length,
-      unreadCount: nextNotice ? 1 : current.unreadCount,
-    }));
-    if (nextNotice) setNotice(nextNotice);
   }, []);
 
   useEffect(() => {
     if (!enabled) {
-      initializedRef.current = false;
-      statusByTaskRef.current.clear();
+      dismissedNotificationIdsRef.current.clear();
       setNotice(null);
       setActivity({ activeCount: 0, attentionCount: 0, unreadCount: 0 });
       return undefined;
@@ -102,7 +113,7 @@ export function BackgroundTaskNotifier({
       refresh().catch(() => undefined);
     };
     safeRefresh();
-    const timer = window.setInterval(safeRefresh, 5000);
+    const timer = window.setInterval(safeRefresh, 3000);
     window.addEventListener('focus', safeRefresh);
     document.addEventListener('visibilitychange', safeRefresh);
     return () => {
@@ -129,13 +140,13 @@ export function BackgroundTaskNotifier({
     >
       <div>
         <strong>{completed ? '后台任务已完成' : '后台任务需要处理'}</strong>
-        <span title={notice.task.title}>{notice.task.title}</span>
+        <span title={notice.notification.title}>{notice.notification.title}</span>
       </div>
       <button
         onClick={() => {
           dismissNotice();
-          if (completed && notice.task.conversation_id) {
-            onOpenConversation(notice.task.conversation_id);
+          if (completed && notice.notification.conversation_id) {
+            onOpenConversation(notice.notification.conversation_id);
           } else {
             onOpenTasks();
           }
@@ -147,7 +158,7 @@ export function BackgroundTaskNotifier({
       <button
         aria-label="关闭任务提醒"
         className="background-task-notice-close"
-        onClick={dismissNotice}
+        onClick={() => dismissNotice()}
         type="button"
       >
         ×

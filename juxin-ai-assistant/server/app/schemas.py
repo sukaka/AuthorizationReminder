@@ -817,6 +817,26 @@ class LongTaskListOut(BaseModel):
     page_size: int = 50
 
 
+class LongTaskNotificationOut(BaseModel):
+    notification_uuid: str
+    task_id: str
+    title: str
+    conversation_id: str
+    message_uuid: str
+    task_status: Literal["completed", "failed", "waiting_user"]
+    attempt: int
+    unread: bool
+    replayed: bool = False
+    created_at: datetime
+    read_at: datetime | None = None
+
+
+class LongTaskNotificationListOut(BaseModel):
+    items: list[LongTaskNotificationOut]
+    total: int
+    unread_count: int
+
+
 class ServerModelStatusOut(BaseModel):
     configured: bool
     model_display_name: str = ""

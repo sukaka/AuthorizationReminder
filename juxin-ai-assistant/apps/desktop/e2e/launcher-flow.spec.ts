@@ -100,7 +100,7 @@ async function openLauncher(
 
   await page.goto('/');
   await expect(
-    page.getByRole('heading', { name: '让日常工作更高效' }),
+    page.getByRole('heading', { name: '你的私人助理' }),
   ).toBeVisible();
 }
 

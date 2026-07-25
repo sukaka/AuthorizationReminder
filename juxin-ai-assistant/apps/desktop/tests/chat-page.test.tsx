@@ -3026,6 +3026,38 @@ it('loads chat history incrementally instead of fetching every session at once',
   expect(requestedPages).toContain(2);
 });
 
+it('searches chat history on the server after a short debounce', async () => {
+  const requestedQueries: string[] = [];
+  server.use(
+    http.get('/api/conversations', ({ request }) => {
+      const query = new URL(request.url).searchParams.get('query') || '';
+      requestedQueries.push(query);
+      return HttpResponse.json({
+        items: query === '季度'
+          ? [{
+              session_uuid: 'session-quarterly-review',
+              title: '季度经营复盘',
+              mode: 'normal',
+              status: 'active',
+              created_at: '2026-07-26T01:00:00Z',
+              updated_at: '2026-07-26T01:01:00Z',
+            }]
+          : [],
+        total: query === '季度' ? 1 : 0,
+        page: 1,
+        page_size: 40,
+      });
+    }),
+  );
+
+  render(<ChatPage />);
+
+  await userEvent.type(await screen.findByLabelText('搜索历史任务'), '季度');
+
+  expect(await screen.findByRole('button', { name: '季度经营复盘' })).toBeInTheDocument();
+  await waitFor(() => expect(requestedQueries).toContain('季度'));
+});
+
 it('manages chat sessions across active, archive, and trash lists', async () => {
   const archiveRequest = vi.fn();
   const restoreRequest = vi.fn();
