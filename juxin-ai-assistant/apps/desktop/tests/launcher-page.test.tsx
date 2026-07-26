@@ -115,10 +115,12 @@ describe('local launcher', () => {
     expect(screen.getByText(/十类私人助理，258项工作技能/)).toBeVisible();
     expect(screen.queryByText('八类助手，88 项常用任务')).not.toBeInTheDocument();
     expect(screen.getByText(/统一登录，安全接入/)).toBeVisible();
+    expect(screen.getByText('统一登录后请选择要进入的系统，我不会在本机保存账号密码。')).toBeVisible();
     expect(screen.getByText('你的设置只在本机')).toBeVisible();
     expect(screen.queryByText('模型密钥保存在系统钥匙串')).not.toBeInTheDocument();
     expect(screen.getByText('草稿我会先替你收好')).toBeVisible();
     expect(screen.getByLabelText('远程服务地址')).toBeVisible();
+    expect(screen.getByText('统一登录后请选择要进入的系统。')).toBeVisible();
     expect(
       screen.getByRole('button', { name: '使用统一登录' }),
     ).toBeDisabled();

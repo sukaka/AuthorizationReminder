@@ -58,6 +58,9 @@ export function LauncherPage({
           <div>
             <span className="launcher-eyebrow">开始使用</span>
             <h2>连接企业服务</h2>
+            <p className="launcher-auxiliary">
+              统一登录后请选择要进入的系统。
+            </p>
           </div>
           <span className="launcher-version">
             版本 {server.currentVersion}{' '}

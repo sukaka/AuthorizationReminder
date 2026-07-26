@@ -1,6 +1,6 @@
 {
   "name": "juxin-ai-assistant-desktop",
-  "version": "5.11.0",
+  "version": "5.13.0",
   "private": true,
   "type": "module",
   "scripts": {

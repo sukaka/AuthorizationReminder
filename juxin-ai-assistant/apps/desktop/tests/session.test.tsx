@@ -79,14 +79,14 @@ describe('unified session shell', () => {
   it('uses the same HTTPS origin for the web portal instead of localhost', () => {
     const portalUrl = getAuthPortalUrl();
 
-    expect(portalUrl).toBe(`${window.location.origin}/portal?system=ai-assistant`);
+    expect(portalUrl).toBe(`${window.location.origin}/portal`);
     expect(portalUrl).not.toContain('localhost:5180');
     expect(getAuthPortalUrl()).not.toContain('/login');
   });
 
   it('can request a real unified logout instead of returning to system selection', () => {
     expect(getAuthPortalUrl({ logout: true })).toBe(
-      `${window.location.origin}/portal?system=ai-assistant&logout=1`,
+      `${window.location.origin}/portal?logout=1`,
     );
   });
 
@@ -100,14 +100,13 @@ describe('unified session shell', () => {
     window.__TAURI_INTERNALS__ = {
       invoke: vi.fn().mockResolvedValue(undefined),
     };
-    window.__JUXIN_DESKTOP_AUTH_PORTAL__ =
-      'https://auth.dynamic.example/portal?system=ai-assistant';
+    window.__JUXIN_DESKTOP_AUTH_PORTAL__ = 'https://auth.dynamic.example/portal';
 
     expect(getAuthPortalUrl()).toBe(
-      'https://auth.dynamic.example/portal?system=ai-assistant',
+      'https://auth.dynamic.example/portal',
     );
     expect(getAuthPortalUrl({ logout: true })).toBe(
-      'https://auth.dynamic.example/portal?system=ai-assistant&logout=1',
+      'https://auth.dynamic.example/portal?logout=1',
     );
   });
 
@@ -117,7 +116,7 @@ describe('unified session shell', () => {
       'https://user@auth.dynamic.example/portal#token';
 
     expect(getAuthPortalUrl()).toBe(
-      'http://localhost:5180/portal?system=ai-assistant',
+      'http://localhost:5180/portal',
     );
   });
 

@@ -9,7 +9,7 @@ const VALUE_POINTS = [
   {
     icon: 'shield',
     title: '统一登录，安全接入',
-    detail: '用企业身份进入工作台，我不会在本机保存账号密码。',
+    detail: '统一登录后请选择要进入的系统，我不会在本机保存账号密码。',
   },
   {
     icon: 'lock',

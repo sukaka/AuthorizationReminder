@@ -29,9 +29,7 @@ def test_desktop_bootstrap_requires_no_session(
     assert response.json() == {
         "product": "juxin-ai-assistant",
         "protocolVersion": 1,
-        "authPortalUrl": (
-            "https://auth.example.test/portal?system=ai-assistant"
-        ),
+        "authPortalUrl": "https://auth.example.test/portal",
         "workspaceUrl": "http://localhost:18093/",
     }
 
@@ -51,9 +49,7 @@ def test_desktop_bootstrap_ignores_forwarded_authority(
 
     # Then: the response remains anchored to trusted configuration.
     assert response.status_code == 200
-    assert response.json()["authPortalUrl"] == (
-        "https://auth.example.test/portal?system=ai-assistant"
-    )
+    assert response.json()["authPortalUrl"] == "https://auth.example.test/portal"
     assert response.json()["workspaceUrl"] == "http://localhost:18093/"
     assert "attacker.example" not in response.text
 
@@ -73,9 +69,7 @@ def test_desktop_bootstrap_ignores_internal_auth_service_url() -> None:
         app.dependency_overrides.pop(get_settings, None)
 
     # Then: the internal Docker hostname is never exposed.
-    assert response.json()["authPortalUrl"] == (
-        "https://auth.example.test/portal?system=ai-assistant"
-    )
+    assert response.json()["authPortalUrl"] == "https://auth.example.test/portal"
     assert "auth.internal" not in response.text
 
 
