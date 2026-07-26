@@ -292,6 +292,7 @@ const getPortalBaseUrl = () => {
 
 const buildPortalEntryUrl = (system) => {
   const base = getPortalBaseUrl()
+  if (!system) return `${base}/portal`
   return `${base}/portal?system=${encodeURIComponent(system)}`
 }
 
@@ -696,7 +697,7 @@ function App() {
     if (authToken) return
     const timer = setTimeout(() => {
       if (shouldThrottlePortalRedirect('reminder')) return
-      window.location.href = buildPortalEntryUrl('reminder')
+      window.location.href = buildPortalEntryUrl()
     }, logoutPending ? 1000 : 120)
     return () => clearTimeout(timer)
   }, [authReady, authToken, logoutPending])
@@ -1731,7 +1732,7 @@ function App() {
 
   const onSwitchSystem = () => {
     if (!authToken) {
-      window.location.href = buildPortalEntryUrl('reminder')
+      window.location.href = buildPortalEntryUrl()
       return
     }
     window.location.href = buildPortalSwitchUrl('reminder')
@@ -3489,14 +3490,14 @@ function App() {
         <div className="login-card">
           <div>
             <h1 className="brand-title"><span className="brand-red">聚信</span><span className="brand-blue">授权到期提醒系统</span></h1>
-            <h1>统一登录中</h1>
-            <p className="sub">正在跳转到统一登录页，请稍候。</p>
+            <h1>统一登录后请选择系统</h1>
+            <p className="sub">正在前往统一登录页；登录成功后，你还需要选择要进入的系统。</p>
           </div>
           <button
             type="button"
             className="primary btn btn-primary"
             onClick={() => {
-              window.location.href = buildPortalEntryUrl('reminder')
+              window.location.href = buildPortalEntryUrl()
             }}
           >
             前往统一登录

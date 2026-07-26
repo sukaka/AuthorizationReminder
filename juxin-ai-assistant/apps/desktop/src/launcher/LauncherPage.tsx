@@ -57,9 +57,9 @@ export function LauncherPage({
         <header>
           <div>
             <span className="launcher-eyebrow">开始使用</span>
-            <h2>连接企业服务</h2>
+            <h2>统一登录并选择系统</h2>
             <p className="launcher-auxiliary">
-              统一登录后请选择要进入的系统。
+              先确认服务地址，再统一登录；登录成功后会进入系统选择页，不会直接跳进某个业务系统。
             </p>
           </div>
           <span className="launcher-version">
@@ -67,6 +67,24 @@ export function LauncherPage({
             {buildMode !== 'production' ? `· ${buildChannelLabel}` : ''}
           </span>
         </header>
+
+        <div className="launcher-journey" aria-label="登录流程说明">
+          <article>
+            <span>01</span>
+            <strong>填写服务地址</strong>
+            <p>先连接你要访问的企业服务，避免登错环境。</p>
+          </article>
+          <article>
+            <span>02</span>
+            <strong>使用统一登录</strong>
+            <p>认证只在统一门户完成，本机不会保存账号密码。</p>
+          </article>
+          <article>
+            <span>03</span>
+            <strong>选择要进入的系统</strong>
+            <p>登录后再选系统，按你的权限进入对应工作台。</p>
+          </article>
+        </div>
 
         <div className="launcher-form">
           <label htmlFor="server-origin">远程服务地址</label>

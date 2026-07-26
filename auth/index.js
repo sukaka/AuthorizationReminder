@@ -4514,7 +4514,7 @@ app.get('/portal', async (req, res) => {
   const portalHeading = isScaPortal ? SCA_SYSTEM_DISPLAY_NAME : '统一登录平台';
   const portalHint = isScaPortal
     ? `使用统一账号登录，登录后进入${SCA_SYSTEM_DISPLAY_NAME}。`
-    : '登录后进入系统（管理员可选择，系统/审计管理员自动进入后台）。';
+    : '统一登录成功后，请先选择要进入的系统；管理员可进入后台，普通用户进入自己有权限的系统。';
   res.send(`<!doctype html>
 <html lang="zh-CN">
 <head>

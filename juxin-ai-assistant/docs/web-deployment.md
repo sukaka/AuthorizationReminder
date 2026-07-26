@@ -96,7 +96,7 @@ openssl x509 -in server.crt -noout -fingerprint -sha256
 
 ## 5. 验收
 
-1. 打开 `https://服务器IP:8443`，未登录时进入同源 `/portal?system=ai-assistant`。
+1. 打开 `https://服务器IP:8443`，未登录时进入同源 `/portal`，统一登录成功后再选择要进入的系统。
 2. 登录后回到 `https://服务器IP:8443`，地址不含 `localhost`。
 3. `GET /api/ai/health` 返回 `200`。
 4. 员工能聊天、上传附件、导出 Word、维护个人模型。
