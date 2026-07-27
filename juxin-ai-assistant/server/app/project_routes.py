@@ -72,6 +72,7 @@ class ProjectMemberOut(BaseModel):
 
     member_uuid: str
     user_id: str
+    username: str
     role: str
     status: str
     invited_by: str
@@ -113,10 +114,11 @@ def _project_out(project: Project) -> ProjectOut:
     )
 
 
-def _member_out(member: ProjectMember) -> ProjectMemberOut:
+def _member_out(member: ProjectMember, username: str = "") -> ProjectMemberOut:
     return ProjectMemberOut(
         member_uuid=member.uuid,
         user_id=member.user_id,
+        username=username or member.username,
         role=member.role,
         status=member.status,
         invited_by=member.invited_by,
@@ -234,6 +236,7 @@ async def create_project(
         ProjectMember(
             project_id=project.id,
             user_id=user_id,
+            username=session_payload.user.username,
             role="project_lead",
             invited_by=user_id,
         )
@@ -277,7 +280,13 @@ async def get_project(
     ).all()
     return ProjectDetailOut(
         **_project_out(project).model_dump(),
-        members=[_member_out(member) for member in members],
+        members=[
+            _member_out(
+                member,
+                session_payload.user.username if member.user_id == str(session_payload.user.id) else "",
+            )
+            for member in members
+        ],
     )
 
 
@@ -303,7 +312,13 @@ async def list_project_members(
         )
         .order_by(ProjectMember.id)
     ).all()
-    return [_member_out(member) for member in members]
+    return [
+        _member_out(
+            member,
+            session_payload.user.username if member.user_id == str(session_payload.user.id) else "",
+        )
+        for member in members
+    ]
 
 
 @router.get(
@@ -362,10 +377,13 @@ async def add_project_member(
     require_project_manager(current_member)
     if body.role not in PROJECT_MEMBER_ROLES:
         raise HTTPException(status_code=422, detail="项目成员角色无效")
+    username = ""
     if not current_settings.auth_dev_bypass:
         directory = await _fetch_system_user_directory(request, current_settings)
-        if body.user_id not in {candidate.user_id for candidate in directory}:
+        candidates_by_user_id = {candidate.user_id: candidate for candidate in directory}
+        if body.user_id not in candidates_by_user_id:
             raise HTTPException(status_code=422, detail="请选择有效的企业用户")
+        username = candidates_by_user_id[body.user_id].username
     existing = db.scalar(
         select(ProjectMember).where(
             ProjectMember.project_id == project.id,
@@ -377,6 +395,7 @@ async def add_project_member(
     member = ProjectMember(
         project_id=project.id,
         user_id=body.user_id,
+        username=username,
         role=body.role,
         invited_by=str(session_payload.user.id),
     )

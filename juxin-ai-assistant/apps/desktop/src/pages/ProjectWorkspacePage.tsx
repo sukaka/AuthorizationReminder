@@ -64,8 +64,32 @@ const priorityLabels: Record<string, string> = {
   urgent: '紧急',
 };
 
+const severityLabels: Record<string, string> = {
+  low: '低风险',
+  medium: '中风险',
+  high: '高风险',
+  critical: '严重',
+};
+
+const memberRoleLabels: Record<string, string> = {
+  project_lead: '项目负责人',
+  project_admin: '项目管理员',
+  member: '成员',
+  reviewer: '审核人',
+  read_only: '只读成员',
+  external_customer: '外部客户',
+};
+
 function statusLabel(value: string): string {
   return statusLabels[value] || value;
+}
+
+function severityLabel(value: string): string {
+  return severityLabels[value] || value;
+}
+
+function memberRoleLabel(value: string): string {
+  return memberRoleLabels[value] || value;
 }
 
 function formatDate(value: string): string {
@@ -261,7 +285,7 @@ export function ProjectWorkspacePage() {
           <div className="project-resource-main">
             <div className="project-resource-heading">
               <strong>{item.title}</strong>
-              <span className={`project-status project-status-${item.severity}`}>{item.severity}</span>
+              <span className={`project-status project-status-${item.severity}`}>{severityLabel(item.severity)}</span>
             </div>
             <p>{item.description || '暂无问题描述'}</p>
             <small>{statusLabel(item.status)} · 创建于 {formatDate(item.created_at)}</small>
@@ -367,15 +391,15 @@ export function ProjectWorkspacePage() {
                   {!resourceLoading && tab === 'overview' ? (
                     <div className="project-overview-grid">
                       <section className="project-overview-card">
-                        <span className="project-card-kicker">NEXT ACTIONS</span>
+                        <span className="project-card-kicker">下一步行动</span>
                         <h3>下一步行动</h3>
                         {tasks.slice(0, 3).map((item) => <p key={item.task_uuid}><span className={`project-status project-status-${item.status}`}>{statusLabel(item.status)}</span>{item.title}</p>)}
                         {!tasks.length ? <p className="project-empty-inline">暂无任务</p> : null}
                       </section>
                       <section className="project-overview-card">
-                        <span className="project-card-kicker">PROJECT PEOPLE</span>
+                        <span className="project-card-kicker">项目成员</span>
                         <h3>协作成员</h3>
-                        {project.members.slice(0, 4).map((member) => <p key={member.member_uuid}><span className="project-member-dot" />{member.user_id}<small>{member.role}</small></p>)}
+                        {project.members.slice(0, 4).map((member) => <p key={member.member_uuid}><span className="project-member-dot" />{member.username || `账号 ${member.user_id}`}<small>{memberRoleLabel(member.role)}</small></p>)}
                         {!project.members.length ? <p className="project-empty-inline">暂无成员</p> : null}
                       </section>
                     </div>

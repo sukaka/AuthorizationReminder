@@ -27,6 +27,12 @@ def test_project_creation_creates_owner_and_isolates_projects(
 
     assert project["name"] == "项目一"
     assert project["owner_user_id"] == "u-1"
+    assert owner.get(f"/api/ai/projects/{project['project_uuid']}").json()["members"] == [
+        {
+            **owner.get(f"/api/ai/projects/{project['project_uuid']}").json()["members"][0],
+            "username": "user-u-1",
+        }
+    ]
     assert [item["project_uuid"] for item in owner.get("/api/ai/projects").json()] == [
         project["project_uuid"]
     ]
@@ -60,6 +66,7 @@ def test_project_membership_grants_access_but_regular_members_cannot_manage_memb
     )
     assert add_member.status_code == 201, add_member.text
     assert add_member.json()["role"] == "member"
+    assert add_member.json()["username"] == ""
 
     assert member.get(f"/api/ai/projects/{project_uuid}").status_code == 200
     assert outsider.get(f"/api/ai/projects/{project_uuid}/members").status_code == 404

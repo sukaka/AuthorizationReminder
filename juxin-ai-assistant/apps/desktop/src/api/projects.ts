@@ -13,6 +13,7 @@ export type ProjectPayload = {
 export type ProjectMemberPayload = {
   member_uuid: string;
   user_id: string;
+  username: string;
   role: string;
   status: string;
   invited_by: string;

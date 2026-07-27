@@ -90,6 +90,7 @@ class ProjectMember(ProjectTimestampMixin, Base):
         index=True,
     )
     user_id: Mapped[str] = mapped_column(String(64), index=True)
+    username: Mapped[str] = mapped_column(String(128), default="")
     role: Mapped[str] = mapped_column(String(32), index=True)
     status: Mapped[str] = mapped_column(String(24), default="active", index=True)
     invited_by: Mapped[str] = mapped_column(String(64), default="")
