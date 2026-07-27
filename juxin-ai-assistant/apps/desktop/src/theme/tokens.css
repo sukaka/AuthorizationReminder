@@ -6823,7 +6823,7 @@ textarea:focus-visible {
   min-height: 0;
   height: 100%;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 18px;
@@ -7263,30 +7263,106 @@ textarea:focus-visible {
 
 .chat-run-context-footer {
   min-height: 52px;
-  padding: 10px 12px;
-  display: flex;
-  justify-content: flex-end;
-  flex-wrap: wrap;
+  padding: 10px 12px 9px;
+  display: grid;
+  align-content: start;
   gap: 6px;
   border-top: 1px solid var(--border);
   background: color-mix(in srgb, var(--background) 56%, var(--surface-solid));
 }
 
-.chat-run-context-footer button {
-  min-height: 30px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface);
-  color: var(--text-secondary);
-  font-size: 11px;
-  font-weight: 750;
-  cursor: pointer;
+.chat-run-context-action-group {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(112px, 1fr));
+  gap: 8px;
 }
 
-.chat-run-context-footer button:hover {
+.chat-run-context-action {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.chat-run-context-action:hover {
+  transform: translateY(-1px);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
   color: var(--accent);
+}
+
+.chat-run-context-action:active {
+  transform: translateY(0);
+}
+
+.chat-run-context-action:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+  outline-offset: 2px;
+}
+
+.chat-run-context-action.is-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: white;
+  box-shadow: 0 5px 14px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+.chat-run-context-action.is-primary:hover {
+  border-color: var(--accent-strong);
+  background: var(--accent-strong);
+  color: white;
+}
+
+.chat-run-context-action.is-secondary:hover {
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+
+.chat-run-context-action.is-stop {
+  border-color: color-mix(in srgb, var(--danger) 22%, var(--border));
+  background: color-mix(in srgb, var(--danger) 6%, var(--surface));
+  color: var(--danger-text);
+}
+
+.chat-run-context-action.is-stop:hover {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--border));
+  color: var(--danger);
+}
+
+.chat-run-context-action.is-tertiary {
+  min-height: 28px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.chat-run-context-action.is-tertiary:hover {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  color: var(--accent);
+}
+
+.chat-run-context-action-icon {
+  width: 14px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  font-size: 13px;
 }
 
 .chat-hero h2 {

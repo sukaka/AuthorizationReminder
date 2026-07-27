@@ -119,6 +119,21 @@ describe('chat workspace layout polish', () => {
     );
   });
 
+  it('keeps task recovery actions compact and visually prioritized', () => {
+    expect(css).toMatch(
+      /\.chat-run-context\s*{[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\) auto;/s,
+    );
+    expect(css).toMatch(
+      /\.chat-run-context-action-group\s*{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(112px,\s*1fr\)\);/s,
+    );
+    expect(css).toMatch(
+      /\.chat-run-context-action\.is-primary\s*{[^}]*background:\s*var\(--accent\);[^}]*color:\s*white;/s,
+    );
+    expect(css).toMatch(
+      /\.chat-run-context-action\.is-tertiary\s*{[^}]*border:\s*0;[^}]*background:\s*transparent;/s,
+    );
+  });
+
   it('polishes the empty chat state instead of only the generated-content state', () => {
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\]\s*{[^}]*border:\s*1px solid[^;]+;[^}]*border-radius:\s*18px;[^}]*background:\s*var\(--surface-solid\);[^}]*box-shadow:/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button:hover,\s*\.chat-sessions > div\[data-session-status\] > button:focus-visible\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);

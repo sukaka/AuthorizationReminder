@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -115,11 +115,14 @@ describe('ChatRunContext', () => {
     const user = userEvent.setup();
     const onRetry = vi.fn();
     const onContinueWithoutTools = vi.fn();
+    const onOpenTaskCenter = vi.fn();
     render(
       <ChatRunContext
         messages={[]}
         onContinueWithoutTools={onContinueWithoutTools}
+        onOpenTaskCenter={onOpenTaskCenter}
         onRetry={onRetry}
+        runId="run-failed-1"
         status="idle"
         taskProgress={{
           ...taskProgress,
@@ -131,11 +134,20 @@ describe('ChatRunContext', () => {
       />,
     );
 
-    const retry = screen.getByRole('button', { name: '重新运行' });
-    expect(retry).toBeInTheDocument();
+    const actions = screen.getByRole('group', { name: '任务操作' });
+    const retry = within(actions).getByRole('button', { name: '重新运行' });
+    const continueWithoutTools = within(actions).getByRole('button', { name: '继续普通回答' });
+    const taskCenter = within(actions).getByRole('button', { name: '打开任务中心' });
+    expect(retry).toHaveClass('is-primary');
+    expect(continueWithoutTools).toHaveClass('is-secondary');
+    expect(taskCenter).toHaveClass('is-tertiary');
+    expect(taskCenter).toHaveTextContent('任务中心');
+
     await user.click(retry);
     expect(onRetry).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole('button', { name: '继续普通回答' }));
+    await user.click(continueWithoutTools);
     expect(onContinueWithoutTools).toHaveBeenCalledTimes(1);
+    await user.click(taskCenter);
+    expect(onOpenTaskCenter).toHaveBeenCalledWith('run-failed-1');
   });
 });

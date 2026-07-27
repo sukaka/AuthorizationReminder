@@ -336,13 +336,60 @@ export function ChatRunContext({
         ) : null}
       </div>
 
-      <footer className="chat-run-context-footer">
-        {status === 'running' && onStop ? <button onClick={onStop} type="button">停止任务</button> : null}
-        {(taskProgress?.stage === 'failed' || taskProgress?.stage === 'stopped') && onRetry ? <button onClick={onRetry} type="button">重新运行</button> : null}
-        {taskProgress?.stage === 'failed' && onContinueWithoutTools ? (
-          <button onClick={onContinueWithoutTools} type="button">继续普通回答</button>
+      <footer
+        aria-label="任务操作"
+        className="chat-run-context-footer"
+        role="group"
+      >
+        {(
+          (status === 'running' && onStop)
+          || ((taskProgress?.stage === 'failed' || taskProgress?.stage === 'stopped') && onRetry)
+          || (taskProgress?.stage === 'failed' && onContinueWithoutTools)
+        ) ? (
+          <div className="chat-run-context-action-group">
+            {status === 'running' && onStop ? (
+              <button
+                className="chat-run-context-action is-stop"
+                onClick={onStop}
+                type="button"
+              >
+                <span aria-hidden="true" className="chat-run-context-action-icon">■</span>
+                <span>停止任务</span>
+              </button>
+            ) : null}
+            {(taskProgress?.stage === 'failed' || taskProgress?.stage === 'stopped') && onRetry ? (
+              <button
+                className="chat-run-context-action is-primary"
+                onClick={onRetry}
+                type="button"
+              >
+                <span aria-hidden="true" className="chat-run-context-action-icon">↻</span>
+                <span>重新运行</span>
+              </button>
+            ) : null}
+            {taskProgress?.stage === 'failed' && onContinueWithoutTools ? (
+              <button
+                className="chat-run-context-action is-secondary"
+                onClick={onContinueWithoutTools}
+                type="button"
+              >
+                <span aria-hidden="true" className="chat-run-context-action-icon">→</span>
+                <span>继续普通回答</span>
+              </button>
+            ) : null}
+          </div>
         ) : null}
-        {runId && onOpenTaskCenter ? <button onClick={() => onOpenTaskCenter(runId)} type="button">打开任务中心</button> : null}
+        {runId && onOpenTaskCenter ? (
+          <button
+            aria-label="打开任务中心"
+            className="chat-run-context-action is-tertiary"
+            onClick={() => onOpenTaskCenter(runId)}
+            type="button"
+          >
+            <span>任务中心</span>
+            <span aria-hidden="true" className="chat-run-context-action-icon">↗</span>
+          </button>
+        ) : null}
       </footer>
     </aside>
   );
