@@ -6806,9 +6806,8 @@ textarea:focus-visible {
 }
 
 .chat-page.has-chat-content .chat-content-grid {
-  width: min(1320px, calc(100% - 284px));
-  margin-left: 24px;
-  margin-right: 236px;
+  width: min(1320px, calc(100% - 48px));
+  margin-inline: auto;
   padding-top: 16px;
 }
 
@@ -7587,6 +7586,10 @@ textarea:focus-visible {
 
 .chat-message.user .chat-message-content p {
   white-space: pre-wrap;
+}
+
+.chat-message.assistant .chat-message-content > p:not(.chat-source-attribution) {
+  text-indent: 2em;
 }
 
 .chat-message-content p + p {

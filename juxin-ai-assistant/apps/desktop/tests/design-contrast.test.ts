@@ -93,6 +93,32 @@ describe('chat workspace layout polish', () => {
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
   });
 
+  it('reclaims the space left by the removed progress rail', () => {
+    const contentGridRule = css.match(
+      /\.chat-page\.has-chat-content \.chat-content-grid\s*\{(?<body>[^}]+)\}/,
+    )?.groups?.body;
+
+    expect(contentGridRule).toBeDefined();
+    expect(contentGridRule).toMatch(
+      /width:\s*min\(1320px,\s*calc\(100% - 48px\)\)/,
+    );
+    expect(contentGridRule).toMatch(/margin-inline:\s*auto/);
+    expect(contentGridRule).not.toContain('284px');
+    expect(contentGridRule).not.toContain('236px');
+  });
+
+  it('indents only normal paragraphs in assistant replies', () => {
+    const assistantParagraphRule = css.match(
+      /\.chat-message\.assistant \.chat-message-content > p:not\(\.chat-source-attribution\)\s*\{(?<body>[^}]+)\}/,
+    )?.groups?.body;
+
+    expect(assistantParagraphRule).toBeDefined();
+    expect(assistantParagraphRule).toMatch(/text-indent:\s*2em/);
+    expect(css).not.toMatch(
+      /\.chat-message\.user \.chat-message-content p\s*\{[^}]*text-indent:/s,
+    );
+  });
+
   it('polishes the empty chat state instead of only the generated-content state', () => {
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\]\s*{[^}]*border:\s*1px solid[^;]+;[^}]*border-radius:\s*18px;[^}]*background:\s*var\(--surface-solid\);[^}]*box-shadow:/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button:hover,\s*\.chat-sessions > div\[data-session-status\] > button:focus-visible\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
