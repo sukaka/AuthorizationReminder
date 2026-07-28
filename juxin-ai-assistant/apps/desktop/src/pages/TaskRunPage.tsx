@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   DynamicTaskForm,
@@ -95,6 +95,17 @@ function isLengthLimitedFinish(reason?: string | null): boolean {
   return String(reason || '').trim().toLowerCase() === 'length';
 }
 
+class GenerationCancelledError extends Error {
+  constructor() {
+    super('GENERATION_CANCELLED');
+    this.name = 'GenerationCancelledError';
+  }
+}
+
+function isGenerationCancelled(error: unknown): error is GenerationCancelledError {
+  return error instanceof GenerationCancelledError;
+}
+
 export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: string }) {
   const desktopAvailable = Boolean(window.__TAURI_INTERNALS__);
   const [profiles, setProfiles] = useState<ModelProfile[]>([]);
@@ -115,6 +126,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
   const [attachments, setAttachments] = useState<AttachmentPayload[]>([]);
   const [attachmentsUploading, setAttachmentsUploading] = useState(false);
   const [knowledgeRefs, setKnowledgeRefs] = useState<KnowledgeRef[]>([]);
+  const cancelledGenerationUuids = useRef(new Set<string>());
 
   useEffect(() => {
     if (!desktopAvailable) return;
@@ -162,6 +174,12 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
 
   const runPrepared = async (prepared: PreparedGeneration) => {
     if (!selectedProfile) throw new Error('请先配置一个本地模型');
+    cancelledGenerationUuids.current.delete(prepared.generation_uuid);
+    const assertGenerationActive = () => {
+      if (cancelledGenerationUuids.current.has(prepared.generation_uuid)) {
+        throw new GenerationCancelledError();
+      }
+    };
     setStatus('generating');
     setOutput('');
     setContextUsageText('');
@@ -187,13 +205,18 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
       messages: prepared.messages,
       temperature: prepared.temperature,
       requestId: currentRequestId,
-    }, (delta) => setOutput((current) => current + delta)).catch((modelError) => {
+    }, (delta) => {
+      if (!cancelledGenerationUuids.current.has(prepared.generation_uuid)) {
+        setOutput((current) => current + delta);
+      }
+    }).catch((modelError) => {
+      assertGenerationActive();
       void auditLocalModel('MODEL_FAILED', {
         errorCode: getGenerationErrorCode(modelError),
       });
       throw modelError;
     });
-    void auditLocalModel('MODEL_COMPLETED', { latencyMs: generated.latencyMs });
+    assertGenerationActive();
     setOutput(generated.output);
     if (shouldRunLoopQualityCheck(prepared.loop_trace)) {
       for (let retryCount = 0; retryCount < 2; retryCount += 1) {
@@ -204,30 +227,42 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           retryCount,
           messages: prepared.messages as AgentLoopMessage[],
         }).catch(() => null);
+        assertGenerationActive();
         if (!check || check.passed || !check.retry_allowed || !check.revision_messages.length) {
           break;
         }
         setGenerationWarning('已根据聚信质量检查自动修正初稿。');
         setOutput('');
+        const revisionRequestId = `${currentRequestId}-revise-${retryCount + 1}`;
+        setRequestId(revisionRequestId);
         generated = await generateLocalModel({
           profileId: selectedProfile.id,
           messages: check.revision_messages,
           temperature: prepared.temperature,
-          requestId: `${currentRequestId}-revise-${retryCount + 1}`,
-        }, (delta) => setOutput((current) => current + delta)).catch((modelError) => {
+          requestId: revisionRequestId,
+        }, (delta) => {
+          if (!cancelledGenerationUuids.current.has(prepared.generation_uuid)) {
+            setOutput((current) => current + delta);
+          }
+        }).catch((modelError) => {
+          assertGenerationActive();
           void auditLocalModel('MODEL_FAILED', {
             errorCode: getGenerationErrorCode(modelError),
           });
           throw modelError;
         });
+        assertGenerationActive();
         setOutput(generated.output);
       }
     }
+    assertGenerationActive();
+    void auditLocalModel('MODEL_COMPLETED', { latencyMs: generated.latencyMs });
     setContextUsageText(formatCompletedTokenUsage(generated.output, generated.usage));
     if (generated.truncated || isLengthLimitedFinish(generated.finishReason)) {
       setGenerationWarning('模型达到输出长度上限，当前内容可能未完整。建议点击重新生成，或使用支持更长输出的模型。');
     }
 
+    assertGenerationActive();
     setStatus('saving');
     const completeResponse = await apiFetch(
       `/api/ai/generations/${prepared.generation_uuid}/complete`,
@@ -311,6 +346,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
       try {
         await runPrepared(prepared);
       } catch (generationError) {
+        if (isGenerationCancelled(generationError)) return;
         await reportGenerationFailure(prepared.generation_uuid, {
           completionToken: prepared.completion_token,
           errorCode: getGenerationErrorCode(generationError),
@@ -339,6 +375,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
       if (!response.ok) throw new Error(`REGENERATE_${response.status}`);
       await runPrepared(await response.json() as PreparedGeneration);
     } catch (regenerationError) {
+      if (isGenerationCancelled(regenerationError)) return;
       setStatus('done');
       setRequestId('');
       setActiveGenerationUuid('');
@@ -366,7 +403,12 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
           return;
         }
         setExportMessage('正在同步结果后导出 Word…');
-        await syncPendingResults(userId, Date.now(), { force: true });
+        const syncResult = await syncPendingResults(userId, Date.now(), { force: true });
+        if (syncResult.failed > 0 || syncResult.pending > 0 || syncResult.attempted === 0) {
+          setExportMessage('');
+          setError('结果同步失败，请检查网络后重试导出 Word');
+          return;
+        }
         setSyncMessage('结果已同步');
       }
       const result = await downloadGenerationWord(generationUuid);
@@ -384,6 +426,14 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
 
   const stop = async () => {
     if (!requestId) return;
+    const cancelledRequestId = requestId;
+    if (activeGenerationUuid) {
+      cancelledGenerationUuids.current.add(activeGenerationUuid);
+    }
+    setStatus('idle');
+    setRequestId('');
+    setActiveGenerationUuid('');
+    setGenerationWarning('已停止生成');
     if (activeGenerationUuid && selectedProfile) {
       reportLocalModelAuditEvent({
         generationUuid: activeGenerationUuid,
@@ -392,7 +442,7 @@ export function TaskRunPage({ task, userId }: { task: TaskDefinition; userId?: s
         provider: 'local-desktop',
       }).catch(() => undefined);
     }
-    await cancelModelGeneration(requestId);
+    await cancelModelGeneration(cancelledRequestId);
   };
 
   if (!desktopAvailable) {

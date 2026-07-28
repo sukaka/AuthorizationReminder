@@ -70,7 +70,7 @@ it('retries due pending results and removes a successfully synchronized item', a
   const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
   vi.stubGlobal('fetch', fetchMock);
 
-  await syncPendingResults('u-1', 5_000);
+  const result = await syncPendingResults('u-1', 5_000);
 
   expect(fetchMock).toHaveBeenCalledWith('/api/ai/generations/gen-retry/complete', {
     method: 'POST',
@@ -85,6 +85,7 @@ it('retries due pending results and removes a successfully synchronized item', a
     userId: 'u-1',
     resultId: 'gen-retry',
   });
+  expect(result).toEqual({ attempted: 1, synced: 1, failed: 0, pending: 0 });
 });
 
 it('can force retry pending results before their backoff expires', async () => {
@@ -106,6 +107,30 @@ it('can force retry pending results before their backoff expires', async () => {
     userId: 'u-1',
     resultId: 'gen-delayed',
   });
+});
+
+it('reports failed synchronization and keeps the result pending', async () => {
+  const item: PendingResult = {
+    generationUuid: 'gen-failed-sync', completionToken: 'token-failed', output: '待重试',
+    modelDisplayName: '公司模型', modelId: 'model-1', latencyMs: 20, usage: {},
+    retryCount: 0, nextRetryAt: 1_000,
+  };
+  invokeMock.mockResolvedValueOnce([{
+    id: item.generationUuid, payload: JSON.stringify(item), status: 'pending', created_at: 1,
+  }]).mockResolvedValueOnce(undefined);
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 503 })));
+
+  const result = await syncPendingResults('u-1', 5_000, { force: true });
+
+  expect(result).toEqual({ attempted: 1, synced: 0, failed: 1, pending: 1 });
+  expect(invokeMock).toHaveBeenLastCalledWith(
+    'local_queue_push',
+    expect.objectContaining({ userId: 'u-1', resultId: 'gen-failed-sync' }),
+  );
+  expect(invokeMock).not.toHaveBeenCalledWith(
+    'local_queue_remove',
+    expect.anything(),
+  );
 });
 
 it('logs out only the current local user without deleting unsynced results', async () => {

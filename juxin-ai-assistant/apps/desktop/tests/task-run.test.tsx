@@ -731,6 +731,9 @@ it('sends sensitive-looking task content without a confirmation dialog', async (
 
 it('cancels the active local request with its request id', async () => {
   let resolveGeneration: ((value: unknown) => void) | undefined;
+  const auditEvents: string[] = [];
+  const completeRequest = vi.fn();
+  const failRequest = vi.fn();
   const pendingGeneration = new Promise((resolve) => {
     resolveGeneration = resolve;
   });
@@ -747,6 +750,19 @@ it('cancels the active local request with its request id', async () => {
         { status: 201 },
       ),
     ),
+    http.post('/api/ai/audit/local-model-events', async ({ request }) => {
+      const body = await request.json() as { event?: string };
+      auditEvents.push(String(body.event || ''));
+      return new HttpResponse(null, { status: 204 });
+    }),
+    http.post('/api/ai/generations/gen-cancel/complete', () => {
+      completeRequest();
+      return HttpResponse.json({ generation_uuid: 'gen-cancel', status: 'COMPLETED' });
+    }),
+    http.post('/api/ai/generations/gen-cancel/fail', () => {
+      failRequest();
+      return HttpResponse.json({ generation_uuid: 'gen-cancel', status: 'FAILED' });
+    }),
   );
   invokeMock.mockImplementation((command: string) => {
     if (command === 'model_profile_list') {
@@ -779,6 +795,12 @@ it('cancels the active local request with its request id', async () => {
   const generateCall = invokeMock.mock.calls.find(([command]) => command === 'model_generate');
   const cancelCall = invokeMock.mock.calls.find(([command]) => command === 'model_cancel');
   expect(cancelCall?.[1].requestId).toBe(generateCall?.[1].requestId);
+  expect(await screen.findByText('已停止生成')).toBeInTheDocument();
+  await waitFor(() => expect(auditEvents).toContain('MODEL_CANCELLED'));
+  expect(auditEvents).not.toContain('MODEL_COMPLETED');
+  expect(completeRequest).not.toHaveBeenCalled();
+  expect(failRequest).not.toHaveBeenCalled();
+  expect(screen.getByRole('button', { name: '开始生成' })).toBeEnabled();
 });
 
 it('restores and saves a user-scoped encrypted device draft', async () => {
@@ -886,6 +908,76 @@ it('forces pending-result sync before exporting Word', async () => {
     userId: 'u-1',
     resultId: 'gen-offline',
   });
+});
+
+it('blocks Word export when the forced pending-result sync still fails', async () => {
+  let completeAttempts = 0;
+  let exportAttempts = 0;
+  let queuedPayload = '';
+  server.use(
+    http.post('/api/ai/generations/prepare', () =>
+      HttpResponse.json({
+        generation_uuid: 'gen-still-offline',
+        completion_token: 'complete-still-offline',
+        messages: [{ role: 'user', content: '生成' }],
+        temperature: 0.3,
+        safety_notice: '需人工复核',
+      }, { status: 201 }),
+    ),
+    http.post('/api/ai/generations/gen-still-offline/complete', () => {
+      completeAttempts += 1;
+      return HttpResponse.json({ detail: 'offline' }, { status: 503 });
+    }),
+    http.get('/api/ai/generations/gen-still-offline/export.docx', () => {
+      exportAttempts += 1;
+      return new HttpResponse(new Uint8Array([100, 111, 99, 120]));
+    }),
+  );
+  invokeMock.mockImplementation((command: string, payload?: Record<string, unknown>) => {
+    if (command === 'model_profile_list') {
+      return Promise.resolve([{
+        id: 'profile-1',
+        displayName: '公司模型',
+        baseUrl: 'https://model.example/v1/',
+        modelId: 'model-1',
+        temperature: 0.3,
+        timeoutSeconds: 60,
+        isDefault: true,
+        hasApiKey: true,
+      }]);
+    }
+    if (command === 'model_generate') {
+      return Promise.resolve({ output: '离线结果', latencyMs: 20, usage: {} });
+    }
+    if (command === 'local_draft_load') return Promise.resolve(null);
+    if (command === 'local_queue_push') {
+      queuedPayload = String(payload?.payload || '');
+      return Promise.resolve();
+    }
+    if (command === 'local_queue_list') {
+      return Promise.resolve([{
+        id: 'gen-still-offline',
+        payload: queuedPayload,
+        status: 'pending',
+        created_at: 1,
+      }]);
+    }
+    if (command === 'local_queue_update') return Promise.resolve();
+    if (command === 'local_draft_delete') return Promise.resolve();
+    return Promise.resolve();
+  });
+
+  render(<TaskRunPage task={workSummaryTask} userId="u-1" />);
+  await userEvent.type(screen.getByLabelText('工作内容'), '持续离线生成');
+  await userEvent.click(screen.getByRole('button', { name: '开始生成' }));
+
+  expect(await screen.findByText('结果已保存在本机，恢复连接后自动同步')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '导出 Word' }));
+
+  expect(await screen.findByText('结果同步失败，请检查网络后重试导出 Word')).toBeInTheDocument();
+  expect(completeAttempts).toBe(2);
+  expect(exportAttempts).toBe(0);
+  expect(invokeMock).not.toHaveBeenCalledWith('generation_word_save', expect.anything());
 });
 
 it('submits result feedback and regenerates through the local model boundary', async () => {

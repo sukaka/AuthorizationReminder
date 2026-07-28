@@ -263,6 +263,7 @@ textarea:focus-visible {
 .sidebar nav button {
   position: relative;
   width: 100%;
+  min-height: 44px;
   padding: 10px 12px;
   display: flex;
   align-items: center;
@@ -279,12 +280,17 @@ textarea:focus-visible {
 }
 
 .nav-icon {
-  width: 18px;
-  min-width: 18px;
+  width: 20px;
+  min-width: 20px;
   display: inline-grid;
   place-items: center;
   color: inherit;
-  font-size: 13px;
+}
+
+.nav-icon svg {
+  width: 20px;
+  height: 20px;
+  display: block;
 }
 
 .nav-label,
@@ -739,10 +745,10 @@ textarea:focus-visible {
 
 .project-primary-button,
 .project-secondary-button {
-  min-height: 36px;
+  min-height: 44px;
   padding: 0 13px;
   border-radius: 10px;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 750;
   cursor: pointer;
 }
@@ -878,6 +884,14 @@ textarea:focus-visible {
   align-items: flex-start;
   justify-content: space-between;
   gap: 18px;
+}
+
+.project-project-header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .project-project-header h2 {
@@ -1241,8 +1255,84 @@ textarea:focus-visible {
   font-size: 13px;
 }
 
-.project-chat-embed {
+.project-chat-launch-button {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-solid));
+  color: var(--accent-text);
+}
+
+.project-chat-dialog {
+  width: min(1480px, calc(100vw - 48px));
+  height: min(920px, calc(100vh - 48px));
+  max-width: none;
+  max-height: none;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface-solid);
+  color: var(--text-primary);
+  box-shadow: 0 24px 80px rgb(16 24 40 / 24%);
+}
+
+.project-chat-dialog::backdrop {
+  background: rgb(16 24 40 / 36%);
+  backdrop-filter: blur(5px);
+}
+
+.project-chat-dialog-frame {
+  height: 100%;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.project-chat-dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.project-chat-dialog-header h2 {
+  margin: 3px 0 4px;
+  font-size: 20px;
+  letter-spacing: -.02em;
+}
+
+.project-chat-dialog-header p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.project-chat-dialog-body {
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--background);
+}
+
+.project-chat-dialog-body .chat-page,
+.project-chat-dialog-body .chat-shell {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.project-chat-dialog-body .chat-topbar {
+  position: static;
+  right: auto;
+  left: auto;
+  width: auto;
+  min-height: 0;
+  margin: 0;
+  padding: 10px 18px 0;
 }
 
 .project-overview-grid {
@@ -1317,6 +1407,29 @@ textarea:focus-visible {
   color: var(--text-secondary);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.project-task-actions,
+.project-task-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.project-task-edit-form {
+  display: grid;
+  width: 100%;
+  gap: 10px;
+}
+
+.project-task-edit-form textarea {
+  min-height: 68px;
+  resize: vertical;
+}
+
+.project-danger-button {
+  color: var(--danger-text, #b42318);
 }
 
 .project-empty-state,
@@ -8573,6 +8686,13 @@ textarea:focus-visible {
   backdrop-filter: saturate(140%) blur(16px);
 }
 
+.chat-composer:focus-within {
+  border-color: color-mix(in srgb, var(--primary) 58%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--primary) 16%, transparent),
+    0 14px 42px rgb(16 24 40 / 9%);
+}
+
 .chat-page:not(.has-chat-content) .chat-composer {
   width: min(720px, 52vw);
   min-width: 500px;
@@ -8854,7 +8974,7 @@ textarea:focus-visible {
 .chat-file-trigger span,
 .chat-reference-chip,
 .chat-model-pill {
-  min-height: 32px;
+  min-height: 36px;
   padding: 0 11px;
   display: inline-flex;
   align-items: center;
@@ -8955,7 +9075,7 @@ textarea:focus-visible {
 .chat-status {
   margin: 8px 2px 0;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: 13px;
   line-height: 1.5;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -8964,6 +9084,14 @@ textarea:focus-visible {
 
 .chat-status {
   color: var(--accent-text);
+}
+
+.workspace-loading {
+  min-height: 240px;
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
 
 .chat-memory-suggestion {
@@ -10550,6 +10678,55 @@ textarea:focus-visible {
     align-items: flex-start;
     flex-direction: column;
   }
+
+  .project-task-actions,
+  .project-task-edit-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .project-project-header-actions {
+    justify-content: flex-start;
+  }
+
+  .project-chat-dialog {
+    width: 100vw;
+    height: 100dvh;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .project-chat-dialog-header {
+    padding: 12px 14px;
+  }
+
+  .project-chat-dialog-header p {
+    display: none;
+  }
+
+  .project-chat-dialog-body .chat-topbar {
+    padding: 8px 14px 0;
+  }
+
+  .project-chat-dialog-body .chat-page,
+  .project-chat-dialog-body .chat-shell,
+  .project-chat-dialog-body .chat-stage {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .project-chat-dialog-body .chat-shell {
+    grid-template-rows: minmax(104px, 188px) minmax(0, 1fr);
+  }
+
+  .project-chat-dialog-body .chat-sessions {
+    height: 100%;
+    max-height: none;
+    padding: 12px 0 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
 }
 
 @media (prefers-reduced-transparency: reduce) {
@@ -10901,4 +11078,95 @@ textarea:focus-visible {
   .enterprise-management-proposal-form > label:nth-of-type(2),
   .enterprise-management-proposal-form > label:nth-of-type(3),
   .enterprise-management-proposal-form > .primary-action { grid-column: auto; }
+}
+
+.app-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: 0 24px 80px color-mix(in srgb, #000 35%, transparent);
+}
+
+.app-dialog::backdrop {
+  background: color-mix(in srgb, #07101f 58%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.app-dialog__surface {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+
+.app-dialog__surface h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.app-dialog__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.app-dialog__field {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.app-dialog__field:focus-visible,
+.app-dialog__button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.app-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.app-dialog__button {
+  min-height: 44px;
+  padding: 9px 18px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.app-dialog__button--secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.app-dialog__button--primary {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.app-dialog__button--danger {
+  background: var(--danger, #c43d4b);
+  color: #fff;
 }

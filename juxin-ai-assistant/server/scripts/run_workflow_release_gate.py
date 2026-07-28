@@ -37,7 +37,7 @@ from sqlalchemy import create_engine, inspect, text
 
 ROOT = Path(__file__).resolve().parents[1]
 _EXPAND_REVISION = "0055_workflow_control_plane"
-_CURRENT_WORKSPACE_HEAD = "0066_skill_uploads"
+_CURRENT_WORKSPACE_HEAD = "0067_project_member_usernames"
 _TRIGGER_NEW_COLUMNS = {"lease_owner", "lease_token", "lease_expires_at"}
 _WAIT_NEW_COLUMNS = {"resume_token_hash", "resume_expires_at"}
 _TRIGGER_NEW_INDEXES = {

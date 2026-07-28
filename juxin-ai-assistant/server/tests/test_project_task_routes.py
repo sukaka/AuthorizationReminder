@@ -51,6 +51,18 @@ def test_project_tasks_and_deliverables_are_isolated_and_track_activity(
     assert status.status_code == 200, status.text
     assert status.json()["status"] == "in_progress"
 
+    updated_task = member.put(
+        f"/api/ai/projects/{project_a_uuid}/tasks/{task_uuid}",
+        json={
+            "title": "完成范围核对并归档",
+            "description": "核对范围并归档客户确认记录",
+            "priority": "urgent",
+        },
+    )
+    assert updated_task.status_code == 200, updated_task.text
+    assert updated_task.json()["title"] == "完成范围核对并归档"
+    assert updated_task.json()["priority"] == "urgent"
+
     deliverable = member.post(
         f"/api/ai/projects/{project_a_uuid}/deliverables",
         json={
@@ -93,12 +105,17 @@ def test_project_tasks_and_deliverables_are_isolated_and_track_activity(
     )
     assert closed.status_code == 200, closed.text
 
+    deleted_task = member.delete(f"/api/ai/projects/{project_a_uuid}/tasks/{task_uuid}")
+    assert deleted_task.status_code == 204, deleted_task.text
+
     activities = owner.get(f"/api/ai/projects/{project_a_uuid}/activities")
     assert activities.status_code == 200, activities.text
     actions = {item["action"] for item in activities.json()}
     assert {
         "project.task.create",
         "project.task.status",
+        "project.task.update",
+        "project.task.delete",
         "project.deliverable.create",
         "project.deliverable.status",
         "project.issue.create",
@@ -109,7 +126,7 @@ def test_project_tasks_and_deliverables_are_isolated_and_track_activity(
 
     assert generation_db.scalar(
         select(ProjectTask).where(ProjectTask.uuid == task_uuid)
-    ) is not None
+    ) is None
     assert generation_db.scalar(
         select(ProjectDeliverable).where(ProjectDeliverable.uuid == deliverable_uuid)
     ) is not None

@@ -5,10 +5,46 @@ import { afterAll, afterEach, beforeAll } from 'vitest';
 import { setupServer } from 'msw/node';
 
 export const server = setupServer(
+  http.get('/api/ai/model-profiles', () => HttpResponse.json([])),
+  http.get('/api/ai/role-assistants', () => HttpResponse.json({
+    items: [],
+    templates: [],
+    catalog_assistants: 0,
+  })),
+  http.get('/api/ai/long-tasks', () => HttpResponse.json({
+    items: [],
+    total: 0,
+    page: 1,
+    page_size: 50,
+  })),
   http.get('/api/ai/long-tasks/notifications', () => HttpResponse.json({
     items: [],
     total: 0,
     unread_count: 0,
+  })),
+  http.get('/api/ai/learning-candidates', () => HttpResponse.json({
+    items: [],
+    total: 0,
+  })),
+  http.get('/api/ai/admin/task-replays', () => HttpResponse.json({
+    items: [],
+    total: 0,
+  })),
+  http.post('/api/ai/audit/local-model-events', () => new HttpResponse(null, { status: 204 })),
+  http.get('/api/ai/projects', () => HttpResponse.json([])),
+  http.get('/api/conversations', () => HttpResponse.json({
+    items: [],
+    total: 0,
+    page: 1,
+    page_size: 20,
+  })),
+  http.get('/api/knowledge/categories', () => HttpResponse.json({
+    items: [],
+    total: 0,
+  })),
+  http.get('/api/knowledge/document-types', () => HttpResponse.json({
+    items: [],
+    total: 0,
   })),
 );
 

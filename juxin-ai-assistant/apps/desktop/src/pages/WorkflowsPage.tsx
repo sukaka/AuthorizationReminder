@@ -16,6 +16,7 @@ import {
   validateWorkflow,
   type WorkflowSchedulePayload,
 } from '../api/client';
+import { confirmAppDialog } from '../components/appDialog';
 
 type WorkflowItem = {
   id: string;
@@ -724,7 +725,12 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
 
   const removeCustom = async () => {
     if (!selectedId) return;
-    if (!window.confirm(`删除自定义流程「${selectedId}」？`)) return;
+    if (!(await confirmAppDialog({
+      title: '删除自定义流程',
+      message: `确认删除“${selectedId}”吗？`,
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     try {
       await deleteCustomWorkflow(selectedId);
       setNotice('已删除');

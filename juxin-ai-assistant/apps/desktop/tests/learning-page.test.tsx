@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -50,10 +50,6 @@ it('lets users edit saved long-term memories', async () => {
     created_at: '2026-07-05T08:00:00Z',
     updated_at: '2026-07-05T08:00:00Z',
   };
-  const promptSpy = vi
-    .spyOn(window, 'prompt')
-    .mockReturnValueOnce('新的标题')
-    .mockReturnValueOnce('新的记忆内容');
   server.use(
     http.get('/api/learning/memories', () => HttpResponse.json({
       items: [memory],
@@ -78,11 +74,21 @@ it('lets users edit saved long-term memories', async () => {
   render(<LearningPage />);
 
   await userEvent.click(await screen.findByRole('button', { name: '编辑' }));
+  const titleDialog = await screen.findByRole('dialog', { name: '记忆标题' });
+  const titleField = within(titleDialog).getByRole('textbox', { name: '记忆标题' });
+  await userEvent.clear(titleField);
+  await userEvent.type(titleField, '新的标题');
+  await userEvent.click(within(titleDialog).getByRole('button', { name: '保存' }));
+
+  const contentDialog = await screen.findByRole('dialog', { name: '记忆内容' });
+  const contentField = within(contentDialog).getByRole('textbox', { name: '记忆内容' });
+  await userEvent.clear(contentField);
+  await userEvent.type(contentField, '新的记忆内容');
+  await userEvent.click(within(contentDialog).getByRole('button', { name: '保存' }));
 
   expect(updateMemory).toHaveBeenCalledWith({ title: '新的标题', content: '新的记忆内容' });
   expect(await screen.findByText('新的标题')).toBeInTheDocument();
   expect(screen.getByText('新的记忆内容')).toBeInTheDocument();
-  promptSpy.mockRestore();
 });
 
 it('lets admins approve submitted company templates', async () => {

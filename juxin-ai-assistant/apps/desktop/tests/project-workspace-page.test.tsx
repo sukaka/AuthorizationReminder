@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { HttpResponse, http } from 'msw';
 import { expect, it, vi } from 'vitest';
@@ -6,6 +6,12 @@ import { expect, it, vi } from 'vitest';
 import App from '../src/App';
 import { ProjectWorkspacePage } from '../src/pages/ProjectWorkspacePage';
 import { server } from './setup';
+
+vi.mock('../src/pages/ChatPage', () => ({
+  ChatPage: ({ initialProjectUuid }: { initialProjectUuid?: string }) => (
+    <div data-testid="project-chat-page">{initialProjectUuid}</div>
+  ),
+}));
 
 const projectA = {
   project_uuid: 'project-a',
@@ -40,6 +46,7 @@ function installProjectHandlers(taskCreate?: (body: { title: string; description
     created_at: '2026-07-13T00:00:00Z',
     updated_at: '2026-07-13T00:00:00Z',
   };
+  const tasksByProject = new Map<string, typeof task[]>([['project-a', [task]]]);
   const details = new Map([
     ['project-a', { ...projectA, members: [{ member_uuid: 'member-1', user_id: 'u-owner', role: 'project_lead', status: 'active', invited_by: 'u-owner', created_at: '2026-07-10T00:00:00Z' }] }],
     ['project-b', { ...projectB, members: [] }],
@@ -58,16 +65,39 @@ function installProjectHandlers(taskCreate?: (body: { title: string; description
       return HttpResponse.json(details.get(String(params.projectUuid)) || { ...projectB, members: [] });
     }),
     http.get('/api/ai/projects/:projectUuid/tasks', ({ params }) => {
-      return HttpResponse.json(params.projectUuid === 'project-a' ? [task] : []);
+      return HttpResponse.json(tasksByProject.get(String(params.projectUuid)) || []);
     }),
-    http.post('/api/ai/projects/:projectUuid/tasks', async ({ request }) => {
+    http.post('/api/ai/projects/:projectUuid/tasks', async ({ params, request }) => {
       const body = await request.json() as { title: string; description: string; priority: string };
+      const createdTask = { ...task, task_uuid: 'task-created', ...body };
+      const projectUuid = String(params.projectUuid);
       taskCreate?.(body);
-      return HttpResponse.json({ ...task, task_uuid: 'task-created', ...body }, { status: 201 });
+      tasksByProject.set(projectUuid, [createdTask, ...(tasksByProject.get(projectUuid) || [])]);
+      return HttpResponse.json(createdTask, { status: 201 });
     }),
-    http.post('/api/ai/projects/:projectUuid/tasks/:taskUuid/status', async ({ request }) => {
+    http.post('/api/ai/projects/:projectUuid/tasks/:taskUuid/status', async ({ params, request }) => {
       const body = await request.json() as { status: string };
-      return HttpResponse.json({ ...task, status: body.status });
+      const projectUuid = String(params.projectUuid);
+      const taskUuid = String(params.taskUuid);
+      const updatedTask = (tasksByProject.get(projectUuid) || []).find((item) => item.task_uuid === taskUuid);
+      if (!updatedTask) return new HttpResponse(null, { status: 404 });
+      updatedTask.status = body.status;
+      return HttpResponse.json(updatedTask);
+    }),
+    http.put('/api/ai/projects/:projectUuid/tasks/:taskUuid', async ({ params, request }) => {
+      const body = await request.json() as { title: string; description: string; priority: string };
+      const projectUuid = String(params.projectUuid);
+      const taskUuid = String(params.taskUuid);
+      const updatedTask = (tasksByProject.get(projectUuid) || []).find((item) => item.task_uuid === taskUuid);
+      if (!updatedTask) return new HttpResponse(null, { status: 404 });
+      Object.assign(updatedTask, body);
+      return HttpResponse.json(updatedTask);
+    }),
+    http.delete('/api/ai/projects/:projectUuid/tasks/:taskUuid', ({ params }) => {
+      const projectUuid = String(params.projectUuid);
+      const taskUuid = String(params.taskUuid);
+      tasksByProject.set(projectUuid, (tasksByProject.get(projectUuid) || []).filter((item) => item.task_uuid !== taskUuid));
+      return new HttpResponse(null, { status: 204 });
     }),
     http.get('/api/ai/projects/:projectUuid/deliverables', () => HttpResponse.json([])),
     http.get('/api/ai/projects/:projectUuid/issues', () => HttpResponse.json([])),
@@ -91,6 +121,26 @@ it('loads projects and switches the project workspace context', async () => {
   expect(screen.getByText('暂无任务')).toBeInTheDocument();
 });
 
+it('opens project chat in a dialog and keeps the selected project context', async () => {
+  const user = userEvent.setup();
+  installProjectHandlers();
+
+  render(<ProjectWorkspacePage />);
+  expect(await screen.findByRole('heading', { name: '星河交付项目' })).toBeInTheDocument();
+
+  const openButton = screen.getByRole('button', { name: '项目聊天' });
+  expect(screen.queryByRole('tab', { name: '项目对话' })).not.toBeInTheDocument();
+
+  await user.click(openButton);
+
+  const dialog = await screen.findByRole('dialog', { name: '星河交付项目' });
+  expect(within(dialog).getByTestId('project-chat-page')).toHaveTextContent('project-a');
+
+  await user.click(within(dialog).getByRole('button', { name: '关闭项目聊天' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(openButton).toHaveFocus();
+});
+
 it('creates a project task and updates its status', async () => {
   const taskCreate = vi.fn();
   installProjectHandlers(taskCreate);
@@ -110,8 +160,20 @@ it('creates a project task and updates its status', async () => {
   }));
   expect(await screen.findByText('整理项目周报')).toBeInTheDocument();
 
-  await userEvent.click(screen.getByRole('button', { name: '开始处理 整理项目周报' }));
-  await waitFor(() => expect(screen.getByText('处理中')).toBeInTheDocument());
+  await userEvent.click(screen.getByRole('button', { name: '编辑 整理项目周报' }));
+  await userEvent.clear(screen.getByRole('textbox', { name: '编辑任务标题' }));
+  await userEvent.type(screen.getByRole('textbox', { name: '编辑任务标题' }), '归档项目周报');
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: '编辑任务优先级' }), 'high');
+  await userEvent.click(screen.getByRole('button', { name: '保存任务' }));
+  expect(await screen.findByText('归档项目周报')).toBeInTheDocument();
+
+  await userEvent.selectOptions(screen.getByRole('combobox', { name: '任务状态 归档项目周报' }), 'in_progress');
+  await waitFor(() => expect(screen.getByText('处理中', { selector: '.project-status' })).toBeInTheDocument());
+
+  await userEvent.click(screen.getByRole('button', { name: '删除 归档项目周报' }));
+  const deleteDialog = await screen.findByRole('dialog', { name: '删除项目任务' });
+  await userEvent.click(within(deleteDialog).getByRole('button', { name: '确认删除' }));
+  await waitFor(() => expect(screen.queryByText('归档项目周报')).not.toBeInTheDocument());
 });
 
 it('creates a project from the workspace header', async () => {

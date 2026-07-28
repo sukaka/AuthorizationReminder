@@ -10,6 +10,7 @@ import {
   type RoleAssistantPayload,
   type TaskPayload,
 } from '../api/client';
+import { promptAppDialog } from '../components/appDialog';
 
 type AssistantsPageProps = {
   onOpenTask: (task: TaskPayload) => void;
@@ -155,8 +156,13 @@ export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
                       void (async () => {
                         setRoleNotice('');
                         try {
-                          const topic =
-                            window.prompt(`为「${role.name}」输入主题`, '')?.trim() || role.name;
+                          const topicInput = await promptAppDialog({
+                            title: `为“${role.name}”输入主题`,
+                            message: '输入本次要生成的文档主题。',
+                            confirmLabel: '开始生成',
+                          });
+                          if (topicInput === null) return;
+                          const topic = topicInput.trim() || role.name;
                           const result = await generateRoleDocument(role.code, {
                             topic,
                             template_code: role.templates[0] || '',

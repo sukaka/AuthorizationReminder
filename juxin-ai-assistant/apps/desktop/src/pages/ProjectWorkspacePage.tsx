@@ -1,8 +1,9 @@
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   createProject,
   createProjectTask,
+  deleteProjectTask,
   getProject,
   listProjectActivities,
   listProjectDeliverables,
@@ -15,13 +16,16 @@ import {
   type ProjectIssuePayload,
   type ProjectPayload,
   type ProjectTaskPayload,
+  updateProjectTask,
   updateProjectTaskStatus,
 } from '../api/projects';
 import { ProjectWorkspaceExtendedPanel, type ProjectWorkspaceExtendedTab } from '../components/ProjectWorkspaceExtendedPanel';
+import { ProjectChatDialog } from '../components/ProjectChatDialog';
+import { confirmAppDialog } from '../components/appDialog';
 
 type ProjectTab = 'overview' | 'tasks' | 'deliverables' | 'issues' | 'activity' | ProjectWorkspaceExtendedTab;
 
-const extendedTabs: ProjectWorkspaceExtendedTab[] = ['chat', 'initialization', 'knowledge', 'memory', 'members'];
+const extendedTabs: ProjectWorkspaceExtendedTab[] = ['initialization', 'knowledge', 'memory', 'members'];
 
 function isExtendedTab(tab: ProjectTab): tab is ProjectWorkspaceExtendedTab {
   return extendedTabs.includes(tab as ProjectWorkspaceExtendedTab);
@@ -33,7 +37,6 @@ const tabLabels: Array<{ id: ProjectTab; label: string }> = [
   { id: 'deliverables', label: '交付物' },
   { id: 'issues', label: '问题' },
   { id: 'activity', label: '动态' },
-  { id: 'chat', label: '项目对话' },
   { id: 'initialization', label: '项目初始化' },
   { id: 'knowledge', label: '资料与知识' },
   { id: 'memory', label: '项目记忆' },
@@ -98,12 +101,6 @@ function formatDate(value: string): string {
   return new Intl.DateTimeFormat('zh-CN', { month: 'short', day: 'numeric' }).format(date);
 }
 
-function nextTaskStatus(status: string): { value: string; label: string } {
-  if (status === 'todo') return { value: 'in_progress', label: '开始处理' };
-  if (status === 'done') return { value: 'todo', label: '重新打开' };
-  return { value: 'done', label: '标记完成' };
-}
-
 export function ProjectWorkspacePage() {
   const [projects, setProjects] = useState<ProjectPayload[]>([]);
   const [selectedProjectUuid, setSelectedProjectUuid] = useState('');
@@ -120,9 +117,16 @@ export function ProjectWorkspacePage() {
   const [taskDescription, setTaskDescription] = useState('');
   const [taskPriority, setTaskPriority] = useState('normal');
   const [taskSubmitting, setTaskSubmitting] = useState(false);
+  const [editingTaskUuid, setEditingTaskUuid] = useState('');
+  const [editingTaskTitle, setEditingTaskTitle] = useState('');
+  const [editingTaskDescription, setEditingTaskDescription] = useState('');
+  const [editingTaskPriority, setEditingTaskPriority] = useState('normal');
+  const [taskActionUuid, setTaskActionUuid] = useState('');
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
   const [projectSubmitting, setProjectSubmitting] = useState(false);
+  const [projectChatOpen, setProjectChatOpen] = useState(false);
+  const projectChatTriggerRef = useRef<HTMLButtonElement>(null);
 
   const loadProjects = useCallback(async () => {
     setLoading(true);
@@ -175,6 +179,7 @@ export function ProjectWorkspacePage() {
   }, []);
 
   useEffect(() => {
+    setEditingTaskUuid('');
     if (selectedProjectUuid) void loadProjectResources(selectedProjectUuid);
     else setProject(null);
   }, [loadProjectResources, selectedProjectUuid]);
@@ -227,37 +232,118 @@ export function ProjectWorkspacePage() {
     }
   };
 
-  const handleTaskStatus = async (task: ProjectTaskPayload) => {
+  const handleTaskStatus = async (task: ProjectTaskPayload, status: string) => {
     if (!selectedProjectUuid) return;
-    const next = nextTaskStatus(task.status);
+    setTaskActionUuid(task.task_uuid);
+    setError('');
     try {
-      const updated = await updateProjectTaskStatus(selectedProjectUuid, task.task_uuid, next.value);
+      const updated = await updateProjectTaskStatus(selectedProjectUuid, task.task_uuid, status);
       setTasks((current) => current.map((item) => item.task_uuid === updated.task_uuid ? updated : item));
     } catch {
       setError('任务状态更新失败，请稍后重试。');
+    } finally {
+      setTaskActionUuid('');
+    }
+  };
+
+  const beginTaskEdit = (task: ProjectTaskPayload) => {
+    setEditingTaskUuid(task.task_uuid);
+    setEditingTaskTitle(task.title);
+    setEditingTaskDescription(task.description);
+    setEditingTaskPriority(task.priority);
+  };
+
+  const cancelTaskEdit = () => {
+    setEditingTaskUuid('');
+    setEditingTaskTitle('');
+    setEditingTaskDescription('');
+    setEditingTaskPriority('normal');
+  };
+
+  const handleUpdateTask = async (event: FormEvent<HTMLFormElement>, task: ProjectTaskPayload) => {
+    event.preventDefault();
+    if (!selectedProjectUuid || !editingTaskTitle.trim()) return;
+    setTaskActionUuid(task.task_uuid);
+    setError('');
+    try {
+      const updated = await updateProjectTask(selectedProjectUuid, task.task_uuid, {
+        title: editingTaskTitle.trim(),
+        description: editingTaskDescription.trim(),
+        priority: editingTaskPriority,
+      });
+      setTasks((current) => current.map((item) => item.task_uuid === updated.task_uuid ? updated : item));
+      cancelTaskEdit();
+    } catch {
+      setError('任务更新失败，请稍后重试。');
+    } finally {
+      setTaskActionUuid('');
+    }
+  };
+
+  const handleDeleteTask = async (task: ProjectTaskPayload) => {
+    if (!selectedProjectUuid || !(await confirmAppDialog({
+      title: '删除项目任务',
+      message: `确定删除“${task.title}”吗？`,
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
+    setTaskActionUuid(task.task_uuid);
+    setError('');
+    try {
+      await deleteProjectTask(selectedProjectUuid, task.task_uuid);
+      setTasks((current) => current.filter((item) => item.task_uuid !== task.task_uuid));
+      if (editingTaskUuid === task.task_uuid) cancelTaskEdit();
+    } catch {
+      setError('任务删除失败，请稍后重试。');
+    } finally {
+      setTaskActionUuid('');
     }
   };
 
   const renderTasks = () => (
     <div className="project-resource-stack">
-      {tasks.length ? tasks.map((taskItem) => {
-        const action = nextTaskStatus(taskItem.status);
-        return (
+      {tasks.length ? tasks.map((taskItem) => (
           <article className="project-resource-row" key={taskItem.task_uuid}>
-            <div className="project-resource-main">
-              <div className="project-resource-heading">
-                <strong>{taskItem.title}</strong>
-                <span className={`project-status project-status-${taskItem.status}`}>{statusLabel(taskItem.status)}</span>
-              </div>
-              {taskItem.description ? <p>{taskItem.description}</p> : null}
-              <small>{priorityLabels[taskItem.priority] || taskItem.priority} · 更新于 {formatDate(taskItem.updated_at)}</small>
-            </div>
-            <button aria-label={`${action.label} ${taskItem.title}`} className="project-secondary-button" onClick={() => void handleTaskStatus(taskItem)} type="button">
-              {action.label}
-            </button>
+            {editingTaskUuid === taskItem.task_uuid ? (
+              <form aria-label={`编辑任务 ${taskItem.title}`} className="project-task-edit-form" onSubmit={(event) => void handleUpdateTask(event, taskItem)}>
+                <input aria-label="编辑任务标题" onChange={(event) => setEditingTaskTitle(event.target.value)} value={editingTaskTitle} />
+                <textarea aria-label="编辑任务说明" onChange={(event) => setEditingTaskDescription(event.target.value)} value={editingTaskDescription} />
+                <div className="project-task-edit-actions">
+                  <select aria-label="编辑任务优先级" onChange={(event) => setEditingTaskPriority(event.target.value)} value={editingTaskPriority}>
+                    <option value="low">低优先级</option>
+                    <option value="normal">普通</option>
+                    <option value="high">高优先级</option>
+                    <option value="urgent">紧急</option>
+                  </select>
+                  <button className="project-primary-button" disabled={taskActionUuid === taskItem.task_uuid || !editingTaskTitle.trim()} type="submit">保存任务</button>
+                  <button className="project-secondary-button" disabled={taskActionUuid === taskItem.task_uuid} onClick={cancelTaskEdit} type="button">取消</button>
+                </div>
+              </form>
+            ) : (
+              <>
+                <div className="project-resource-main">
+                  <div className="project-resource-heading">
+                    <strong>{taskItem.title}</strong>
+                    <span className={`project-status project-status-${taskItem.status}`}>{statusLabel(taskItem.status)}</span>
+                  </div>
+                  {taskItem.description ? <p>{taskItem.description}</p> : null}
+                  <small>{priorityLabels[taskItem.priority] || taskItem.priority} · 更新于 {formatDate(taskItem.updated_at)}</small>
+                </div>
+                <div className="project-task-actions">
+                  <select aria-label={`任务状态 ${taskItem.title}`} disabled={taskActionUuid === taskItem.task_uuid} onChange={(event) => void handleTaskStatus(taskItem, event.target.value)} value={taskItem.status}>
+                    <option value="todo">待处理</option>
+                    <option value="in_progress">处理中</option>
+                    <option value="blocked">受阻</option>
+                    <option value="done">已完成</option>
+                    <option value="cancelled">已取消</option>
+                  </select>
+                  <button aria-label={`编辑 ${taskItem.title}`} className="project-secondary-button" disabled={taskActionUuid === taskItem.task_uuid} onClick={() => beginTaskEdit(taskItem)} type="button">编辑</button>
+                  <button aria-label={`删除 ${taskItem.title}`} className="project-secondary-button project-danger-button" disabled={taskActionUuid === taskItem.task_uuid} onClick={() => void handleDeleteTask(taskItem)} type="button">删除</button>
+                </div>
+              </>
+            )}
           </article>
-        );
-      }) : <p className="project-empty-state">还没有项目任务。先把下一步行动记下来。</p>}
+      )) : <p className="project-empty-state">还没有项目任务。先把下一步行动记下来。</p>}
     </div>
   );
 
@@ -317,7 +403,7 @@ export function ProjectWorkspacePage() {
     <section aria-labelledby="project-workspace-title" className="project-workspace-page">
       <header className="project-workspace-header">
         <div>
-          <span className="project-workspace-kicker">PROJECT WORKSPACE · 2.0</span>
+          <span className="project-workspace-kicker">项目协作空间</span>
           <h1 id="project-workspace-title">项目工作空间</h1>
           <p>把项目背景、任务、交付物和协作动态放在同一个可持续工作的上下文里。</p>
         </div>
@@ -350,7 +436,7 @@ export function ProjectWorkspacePage() {
             </div>
             <div className="project-project-list">
               {projects.map((item) => (
-                <button className={`project-project-card ${selectedProjectUuid === item.project_uuid ? 'is-selected' : ''}`} key={item.project_uuid} onClick={() => setSelectedProjectUuid(item.project_uuid)} type="button">
+                <button className={`project-project-card ${selectedProjectUuid === item.project_uuid ? 'is-selected' : ''}`} key={item.project_uuid} onClick={() => { setSelectedProjectUuid(item.project_uuid); setProjectChatOpen(false); }} type="button">
                   <span className="project-project-avatar">{item.name.slice(0, 1)}</span>
                   <span className="project-project-copy">
                     <strong>{item.name}</strong>
@@ -370,7 +456,10 @@ export function ProjectWorkspacePage() {
                     <h2>{project.name}</h2>
                     <p>{project.description || '还没有项目描述，先从一次项目对话开始。'}</p>
                   </div>
-                  <span className={`project-status project-status-${project.status}`}>{statusLabel(project.status)}</span>
+                  <div className="project-project-header-actions">
+                    <button className="project-secondary-button project-chat-launch-button" onClick={() => setProjectChatOpen(true)} ref={projectChatTriggerRef} type="button">项目聊天</button>
+                    <span className={`project-status project-status-${project.status}`}>{statusLabel(project.status)}</span>
+                  </div>
                 </header>
 
                 <div className="project-stat-strip" aria-label="项目摘要">
@@ -415,7 +504,7 @@ export function ProjectWorkspacePage() {
 
                 <form aria-label="创建项目任务" className="project-create-task" onSubmit={(event) => void handleCreateTask(event)}>
                   <div>
-                    <span className="project-card-kicker">QUICK CAPTURE</span>
+                    <span className="project-card-kicker">快速记录</span>
                     <strong>记下一项项目行动</strong>
                   </div>
                   <input aria-label="任务标题" onChange={(event) => setTaskTitle(event.target.value)} placeholder="任务标题" value={taskTitle} />
@@ -428,6 +517,14 @@ export function ProjectWorkspacePage() {
                   <button className="project-primary-button" disabled={taskSubmitting || !taskTitle.trim()} type="submit">{taskSubmitting ? '保存中…' : '添加任务'}</button>
                   <textarea aria-label="任务描述" onChange={(event) => setTaskDescription(event.target.value)} placeholder="补充说明（可选）" value={taskDescription} />
                 </form>
+                {projectChatOpen ? (
+                  <ProjectChatDialog
+                    onClose={() => setProjectChatOpen(false)}
+                    projectName={project.name}
+                    projectUuid={selectedProjectUuid}
+                    returnFocusRef={projectChatTriggerRef}
+                  />
+                ) : null}
               </>
             ) : <p className="project-loading-state">正在打开项目…</p>}
           </div>

@@ -4,6 +4,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { DesktopBridge } from '../remote/desktopBridge';
 import { toProbeFailure } from '../remote/desktopBridge';
 import { buildMode } from '../buildMode';
+import { confirmAppDialog } from '../components/appDialog';
 import {
   launcherStatusContent,
   type LauncherState,
@@ -105,9 +106,12 @@ export function useServerFlow(
     if (
       savedOrigin &&
       savedOrigin !== origin &&
-      !window.confirm(
-        `远程服务将从 ${hostLabel(savedOrigin)} 切换为 ${hostLabel(origin)}。新服务器将成为本机数据同步和模型命令的受信任业务来源，是否继续？`,
-      )
+      !(await confirmAppDialog({
+        title: '切换受信任服务器',
+        message: `远程服务将从 ${hostLabel(savedOrigin)} 切换为 ${hostLabel(origin)}。新服务器将成为本机数据同步和模型命令的受信任业务来源。`,
+        confirmLabel: '确认切换',
+        danger: true,
+      }))
     ) {
       setState({
         kind: 'needs-server',

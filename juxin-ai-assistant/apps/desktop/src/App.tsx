@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 
 import juxinAiLogo from './assets/juxin-ai-logo.png';
 import {
@@ -11,28 +11,8 @@ import {
   type SessionPayload,
   type TaskPayload,
 } from './api/client';
-import { ModelProfilesPage } from './pages/ModelProfilesPage';
-import { AssistantsPage } from './pages/AssistantsPage';
-import { ChatPage } from './pages/ChatPage';
-import { ChatRunPrototypePage } from './pages/ChatRunPrototypePage';
-import { ProjectWorkspacePage } from './pages/ProjectWorkspacePage';
-import { EnterpriseOverviewPage } from './pages/EnterpriseOverviewPage';
-import { EnterpriseManagementPage } from './pages/EnterpriseManagementPage';
-import { ProfessionalDeliverablesPage } from './pages/ProfessionalDeliverablesPage';
-import { ProfessionalTasksPage } from './pages/ProfessionalTasksPage';
-import { HistoryPage } from './pages/HistoryPage';
-import { KnowledgePage } from './pages/KnowledgePage';
-import { LearningPage } from './pages/LearningPage';
-import { SkillsPage } from './pages/SkillsPage';
-import { TasksPage } from './pages/TasksPage';
-import { WorkflowsPage } from './pages/WorkflowsPage';
-import { AgentHubPage } from './pages/AgentHubPage';
-import { TaskRunPage, type TaskDefinition } from './pages/TaskRunPage';
+import type { TaskDefinition } from './pages/TaskRunPage';
 import { logoutLocalUser, syncPendingResults } from './local/syncQueue';
-import { AuditPage } from './pages/admin/AuditPage';
-import { GovernanceCenter } from './pages/admin/GovernanceCenter';
-import { StatsPage } from './pages/admin/StatsPage';
-import { SuggestionsPage } from './pages/admin/SuggestionsPage';
 import { LauncherPage } from './launcher/LauncherPage';
 import { WorkspaceUpdateControl } from './launcher/WorkspaceUpdateControl';
 import { getRuntimeCapabilities } from './runtime/capabilities';
@@ -50,6 +30,29 @@ import {
   BackgroundTaskNotifier,
   type BackgroundTaskActivity,
 } from './components/BackgroundTaskNotifier';
+import { SidebarIcon } from './components/SidebarIcon';
+
+const ModelProfilesPage = lazy(() => import('./pages/ModelProfilesPage').then((module) => ({ default: module.ModelProfilesPage })));
+const AssistantsPage = lazy(() => import('./pages/AssistantsPage').then((module) => ({ default: module.AssistantsPage })));
+const ChatPage = lazy(() => import('./pages/ChatPage').then((module) => ({ default: module.ChatPage })));
+const ChatRunPrototypePage = lazy(() => import('./pages/ChatRunPrototypePage').then((module) => ({ default: module.ChatRunPrototypePage })));
+const ProjectWorkspacePage = lazy(() => import('./pages/ProjectWorkspacePage').then((module) => ({ default: module.ProjectWorkspacePage })));
+const EnterpriseOverviewPage = lazy(() => import('./pages/EnterpriseOverviewPage').then((module) => ({ default: module.EnterpriseOverviewPage })));
+const EnterpriseManagementPage = lazy(() => import('./pages/EnterpriseManagementPage').then((module) => ({ default: module.EnterpriseManagementPage })));
+const ProfessionalDeliverablesPage = lazy(() => import('./pages/ProfessionalDeliverablesPage').then((module) => ({ default: module.ProfessionalDeliverablesPage })));
+const ProfessionalTasksPage = lazy(() => import('./pages/ProfessionalTasksPage').then((module) => ({ default: module.ProfessionalTasksPage })));
+const HistoryPage = lazy(() => import('./pages/HistoryPage').then((module) => ({ default: module.HistoryPage })));
+const KnowledgePage = lazy(() => import('./pages/KnowledgePage').then((module) => ({ default: module.KnowledgePage })));
+const LearningPage = lazy(() => import('./pages/LearningPage').then((module) => ({ default: module.LearningPage })));
+const SkillsPage = lazy(() => import('./pages/SkillsPage').then((module) => ({ default: module.SkillsPage })));
+const TasksPage = lazy(() => import('./pages/TasksPage').then((module) => ({ default: module.TasksPage })));
+const WorkflowsPage = lazy(() => import('./pages/WorkflowsPage').then((module) => ({ default: module.WorkflowsPage })));
+const AgentHubPage = lazy(() => import('./pages/AgentHubPage').then((module) => ({ default: module.AgentHubPage })));
+const TaskRunPage = lazy(() => import('./pages/TaskRunPage').then((module) => ({ default: module.TaskRunPage })));
+const AuditPage = lazy(() => import('./pages/admin/AuditPage').then((module) => ({ default: module.AuditPage })));
+const GovernanceCenter = lazy(() => import('./pages/admin/GovernanceCenter').then((module) => ({ default: module.GovernanceCenter })));
+const StatsPage = lazy(() => import('./pages/admin/StatsPage').then((module) => ({ default: module.StatsPage })));
+const SuggestionsPage = lazy(() => import('./pages/admin/SuggestionsPage').then((module) => ({ default: module.SuggestionsPage })));
 
 type WorkspacePage =
   | NavigableWorkspacePage
@@ -367,10 +370,10 @@ function Workspace({ session }: { session: SessionPayload }) {
           <strong className="brand-label">聚信 AI 助手 · 私人工作助理</strong>
         </div>
         <nav aria-label="主导航" className="sidebar-main-nav">
-          <button aria-label="对话" title="对话" aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true">●</span><span className="nav-label">对话</span></button>
-          <button aria-label="项目" title="项目" aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true">⌂</span><span className="nav-label">项目</span></button>
+          <button aria-label="对话" title="对话" aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="chat" /></span><span className="nav-label">对话</span></button>
+          <button aria-label="项目" title="项目" aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="project" /></span><span className="nav-label">项目</span></button>
           <button aria-label="任务与交付" title={taskNavigationTitle} aria-current={isTaskDeliveryPage ? 'page' : undefined} className={isTaskDeliveryPage ? 'is-current' : ''} onClick={() => setPage('tasks')} type="button">
-            <span className="nav-icon" aria-hidden="true">◆</span>
+            <span className="nav-icon" aria-hidden="true"><SidebarIcon name="tasks" /></span>
             <span className="nav-label">任务与交付</span>
             {taskIndicatorCount ? (
               <span aria-hidden="true" className={`nav-task-badge is-${taskIndicatorKind}`}>
@@ -378,15 +381,15 @@ function Workspace({ session }: { session: SessionPayload }) {
               </span>
             ) : null}
           </button>
-          {isAdmin ? <button aria-label="AI 能力" title="AI 能力" aria-current={isAiCapabilityPage ? 'page' : undefined} className={isAiCapabilityPage ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">AI 能力</span></button> : null}
-          <button aria-label="知识与学习" title="知识与学习" aria-current={isKnowledgeLearningPage ? 'page' : undefined} className={isKnowledgeLearningPage ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">知识与学习</span></button>
-          {canViewEnterprise ? <button aria-label="企业洞察" title="企业洞察" aria-current={isEnterpriseInsightPage ? 'page' : undefined} className={isEnterpriseInsightPage ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true">◉</span><span className="nav-label">企业洞察</span></button> : null}
+          {isAdmin ? <button aria-label="AI 能力" title="AI 能力" aria-current={isAiCapabilityPage ? 'page' : undefined} className={isAiCapabilityPage ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="ai" /></span><span className="nav-label">AI 能力</span></button> : null}
+          <button aria-label="知识与学习" title="知识与学习" aria-current={isKnowledgeLearningPage ? 'page' : undefined} className={isKnowledgeLearningPage ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="knowledge" /></span><span className="nav-label">知识与学习</span></button>
+          {canViewEnterprise ? <button aria-label="企业洞察" title="企业洞察" aria-current={isEnterpriseInsightPage ? 'page' : undefined} className={isEnterpriseInsightPage ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="enterprise" /></span><span className="nav-label">企业洞察</span></button> : null}
         </nav>
         <nav aria-label="管理与设置" className="sidebar-utility-nav">
-          {canManageEnterprise ? <button aria-label="管理中心" title="管理中心" aria-current={isManagementPage ? 'page' : undefined} className={isManagementPage ? 'is-current' : ''} onClick={() => setPage(isAdmin ? 'governance' : 'enterprise-management')} type="button"><span className="nav-icon" aria-hidden="true">⚙</span><span className="nav-label">管理中心</span></button> : null}
-          {!isAdmin && canReadAudit ? <button aria-label="审计日志" title="审计日志" aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button"><span className="nav-icon" aria-hidden="true">▤</span><span className="nav-label">审计日志</span></button> : null}
-          <button aria-label="设置" title="设置" aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true">◇</span><span className="nav-label">设置</span></button>
-          {canSubmitSuggestion ? <button aria-label="帮助与反馈" title="帮助与反馈" aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true">?</span><span className="nav-label">帮助与反馈</span></button> : null}
+          {canManageEnterprise ? <button aria-label="管理中心" title="管理中心" aria-current={isManagementPage ? 'page' : undefined} className={isManagementPage ? 'is-current' : ''} onClick={() => setPage(isAdmin ? 'governance' : 'enterprise-management')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="management" /></span><span className="nav-label">管理中心</span></button> : null}
+          {!isAdmin && canReadAudit ? <button aria-label="审计日志" title="审计日志" aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="audit" /></span><span className="nav-label">审计日志</span></button> : null}
+          <button aria-label="设置" title="设置" aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="settings" /></span><span className="nav-label">设置</span></button>
+          {canSubmitSuggestion ? <button aria-label="帮助与反馈" title="帮助与反馈" aria-current={page === 'suggestions' ? 'page' : undefined} className={page === 'suggestions' ? 'is-current' : ''} onClick={() => setPage('suggestions')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="help" /></span><span className="nav-label">帮助与反馈</span></button> : null}
         </nav>
         <div className="sidebar-foot">
           {capabilities.canUseAutoUpdater ? <WorkspaceUpdateControl /> : null}
@@ -471,6 +474,7 @@ function Workspace({ session }: { session: SessionPayload }) {
               ))}
             </nav>
           ) : null}
+        <Suspense fallback={<section className="workspace-loading" role="status">正在加载工作台…</section>}>
         {page === 'chat-prototype' ? (
           <ChatRunPrototypePage onBack={() => setPage('chat')} />
         ) : page === 'models' ? (
@@ -574,6 +578,7 @@ function Workspace({ session }: { session: SessionPayload }) {
             }}
           />
         )}
+        </Suspense>
         </div>
       </main>
       <BackgroundTaskNotifier

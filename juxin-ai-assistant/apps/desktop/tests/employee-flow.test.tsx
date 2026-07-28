@@ -68,12 +68,12 @@ beforeEach(() => {
   });
 });
 
-it('shows all assistants regardless of the signed-in department and supports task search', async () => {
+it('shows all assistants to administrators regardless of department and supports task search', async () => {
   const favoriteRequest = vi.fn();
   server.use(
     http.get('/api/ai/session', () =>
       HttpResponse.json({
-        user: { id: 'u-sales', username: '销售员工', role: 'employee' },
+        user: { id: 'u-sales-admin', username: '销售管理员', role: 'admin' },
         scope: { department: '销售部', managedDepartments: [] },
         apps: ['ai-assistant'],
         local_binding_token: 'signed-binding-token',
@@ -122,7 +122,7 @@ it('shows all assistants regardless of the signed-in department and supports tas
   expect(screen.getByRole('button', { name: '取消收藏 报价说明生成' })).toBeInTheDocument();
 });
 
-it('opens chat after login without adding an extra sidebar menu', async () => {
+it('opens chat after login and hides AI capability navigation for ordinary users', async () => {
   server.use(
     http.get('/api/ai/session', () =>
       HttpResponse.json({
@@ -150,12 +150,10 @@ it('opens chat after login without adding an extra sidebar menu', async () => {
   expect(screen.getByRole('heading', { name: '告诉我你想完成什么工作' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   const mainNav = screen.getByRole('navigation', { name: '主导航' });
-  expect(within(mainNav).getByRole('button', { name: 'AI 能力' })).toBeInTheDocument();
+  expect(within(mainNav).queryByRole('button', { name: 'AI 能力' })).not.toBeInTheDocument();
   expect(within(mainNav).getByRole('button', { name: '对话' })).toHaveAttribute('aria-current', 'page');
   expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
-  await userEvent.click(within(mainNav).getByRole('button', { name: 'AI 能力' }));
-  await userEvent.click(within(mainNav).getByRole('button', { name: '对话' }));
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
 });
 

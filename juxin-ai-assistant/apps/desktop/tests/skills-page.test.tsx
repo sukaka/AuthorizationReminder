@@ -200,10 +200,10 @@ it('shows admin skill governance with ids, versions, tools and review actions', 
   await waitFor(() => expect(publish).toHaveBeenCalled());
 });
 
-it('adds the capability center to the main navigation for ordinary users', async () => {
+it('adds the capability center to the main navigation for administrators', async () => {
   server.use(
     http.get('/api/ai/session', () => HttpResponse.json({
-      user: { id: 'u-employee', username: '员工用户', role: 'employee' },
+      user: { id: 'u-admin', username: '管理员用户', role: 'admin' },
       scope: { department: '交付部', managedDepartments: [] },
       apps: ['ai-assistant'],
       local_binding_token: 'signed-binding-token',

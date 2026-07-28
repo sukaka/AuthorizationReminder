@@ -34,7 +34,7 @@ from typing import Any, Iterator
 ROOT = Path(__file__).resolve().parents[1]
 # Keep the expected head explicit so a newly-added migration cannot silently
 # make the current candidate look stale.
-_WORKSPACE_HEAD = "0066_skill_uploads"
+_WORKSPACE_HEAD = "0067_project_member_usernames"
 _CANDIDATES = ("current", "candidate_a", "candidate_b")
 
 

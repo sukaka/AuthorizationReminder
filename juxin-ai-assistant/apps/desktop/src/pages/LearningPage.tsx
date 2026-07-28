@@ -28,6 +28,7 @@ import {
   type LearningMemoryPayload,
   type LearningTemplatePayload,
 } from '../api/client';
+import { confirmAppDialog, promptAppDialog } from '../components/appDialog';
 
 type LearningTab = 'knowledge' | 'templates' | 'template-reviews' | 'improvements' | 'candidates';
 
@@ -172,9 +173,16 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const editMemory = async (item: LearningMemoryPayload) => {
-    const title = window.prompt('记忆标题', item.title || item.memory_type)?.trim();
+    const title = (await promptAppDialog({
+      title: '记忆标题',
+      initialValue: item.title || item.memory_type,
+    }))?.trim();
     if (!title) return;
-    const content = window.prompt('记忆内容', item.content)?.trim();
+    const content = (await promptAppDialog({
+      title: '记忆内容',
+      initialValue: item.content,
+      multiline: true,
+    }))?.trim();
     if (!content) return;
     try {
       await updateLearningMemory(item.uuid, { title, content });
@@ -186,7 +194,12 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const removeMemory = async (item: LearningMemoryPayload) => {
-    if (!window.confirm('确认删除这条记忆？删除后不会再参与回答。')) return;
+    if (!(await confirmAppDialog({
+      title: '删除记忆',
+      message: '删除后，这条记忆不会再参与回答。',
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     try {
       await deleteLearningMemory(item.uuid);
       await refresh();
@@ -196,9 +209,16 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const editExperience = async (item: LearningExperiencePayload) => {
-    const title = window.prompt('经验标题', item.title)?.trim();
+    const title = (await promptAppDialog({
+      title: '经验标题',
+      initialValue: item.title,
+    }))?.trim();
     if (!title) return;
-    const summary = window.prompt('经验摘要', item.summary || item.answer.slice(0, 300))?.trim();
+    const summary = (await promptAppDialog({
+      title: '经验摘要',
+      initialValue: item.summary || item.answer.slice(0, 300),
+      multiline: true,
+    }))?.trim();
     if (summary === undefined) return;
     try {
       await updateLearningExperience(item.uuid, { title, summary });
@@ -210,7 +230,12 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const removeExperience = async (item: LearningExperiencePayload) => {
-    if (!window.confirm('确认删除这条经验？删除后不会再参与类似问题参考。')) return;
+    if (!(await confirmAppDialog({
+      title: '删除经验',
+      message: '删除后，这条经验不会再参与类似问题参考。',
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     try {
       await deleteLearningExperience(item.uuid);
       setNotice('经验已删除。');
@@ -221,9 +246,16 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const editTemplate = async (item: LearningTemplatePayload) => {
-    const templateName = window.prompt('模板名称', item.template_name)?.trim();
+    const templateName = (await promptAppDialog({
+      title: '模板名称',
+      initialValue: item.template_name,
+    }))?.trim();
     if (!templateName) return;
-    const templateContent = window.prompt('模板内容', item.template_content)?.trim();
+    const templateContent = (await promptAppDialog({
+      title: '模板内容',
+      initialValue: item.template_content,
+      multiline: true,
+    }))?.trim();
     if (!templateContent) return;
     try {
       await updateLearningTemplate(item.uuid, { template_name: templateName, template_content: templateContent });
@@ -235,7 +267,11 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const submitTemplate = async (item: LearningTemplatePayload) => {
-    if (!window.confirm('提交后将作为公司模板候选，等待管理员审核。继续？')) return;
+    if (!(await confirmAppDialog({
+      title: '提交公司模板审核',
+      message: '提交后将作为公司模板候选，等待管理员审核。',
+      confirmLabel: '提交审核',
+    }))) return;
     try {
       await submitLearningTemplateReview(item.uuid);
       setNotice('已提交公司模板审核。');
@@ -246,7 +282,12 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const removeTemplate = async (item: LearningTemplatePayload) => {
-    if (!window.confirm('确认删除这个模板？')) return;
+    if (!(await confirmAppDialog({
+      title: '删除模板',
+      message: `确认删除“${item.template_name}”吗？`,
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     try {
       await deleteLearningTemplate(item.uuid);
       setNotice('模板已删除。');
@@ -267,7 +308,12 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const rejectTemplate = async (item: LearningTemplatePayload) => {
-    if (!window.confirm('确认驳回这个公司模板申请？驳回后仍保留为用户个人模板。')) return;
+    if (!(await confirmAppDialog({
+      title: '驳回公司模板申请',
+      message: '驳回后仍会保留为用户个人模板。',
+      confirmLabel: '确认驳回',
+      danger: true,
+    }))) return;
     try {
       await rejectLearningTemplateReview(item.uuid);
       setNotice('公司模板申请已驳回。');
@@ -278,7 +324,11 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const editFailure = async (item: LearningFailureCasePayload) => {
-    const preventionRule = window.prompt('防复发规则', item.prevention_rule)?.trim();
+    const preventionRule = (await promptAppDialog({
+      title: '防复发规则',
+      initialValue: item.prevention_rule,
+      multiline: true,
+    }))?.trim();
     if (!preventionRule) return;
     try {
       await updateLearningFailureCase(item.uuid, { prevention_rule: preventionRule });
@@ -290,7 +340,12 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
   };
 
   const removeFailure = async (item: LearningFailureCasePayload) => {
-    if (!window.confirm('确认删除这条错误修正记录？删除后不会再参与防复发提醒。')) return;
+    if (!(await confirmAppDialog({
+      title: '删除错误修正记录',
+      message: '删除后，这条记录不会再参与防复发提醒。',
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     try {
       await deleteLearningFailureCase(item.uuid);
       setNotice('错误修正记录已删除。');

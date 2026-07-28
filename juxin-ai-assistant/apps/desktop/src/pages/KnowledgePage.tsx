@@ -51,6 +51,7 @@ import {
   updateKnowledgeFileMetadata,
   uploadKnowledgeFile,
 } from '../api/chat';
+import { confirmAppDialog, promptAppDialog } from '../components/appDialog';
 
 type KnowledgePageProps = {
   readonly session: SessionPayload;
@@ -1094,9 +1095,11 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
 
   const uploadFile = async () => {
     if (!pendingUploadFiles.length || uploadingFiles) return;
-    if (duplicateUploadFileNames.length && !window.confirm(
-      `我的资料中已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两份独立资料，是否继续？`,
-    )) {
+    if (duplicateUploadFileNames.length && !(await confirmAppDialog({
+      title: '发现同名资料',
+      message: `我的资料中已存在以下同名文件：\n${duplicateUploadFileNames.map((name) => `• ${name}`).join('\n')}\n\n继续上传会保留两份独立资料。`,
+      confirmLabel: '仍然上传',
+    }))) {
       setUploadStatus('已取消上传，请修改文件名或移除同名文件后再试。');
       return;
     }
@@ -1371,13 +1374,21 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
 
   const renameFile = async (file: KnowledgeFilePayload) => {
-    const nextName = window.prompt('重命名资料', file.file_name)?.trim();
+    const nextName = (await promptAppDialog({
+      title: '重命名资料',
+      initialValue: file.file_name,
+      confirmLabel: '保存名称',
+    }))?.trim();
     if (!nextName || nextName === file.file_name) return;
     const hasDuplicate = files.some((item) => (
       item.file_uuid !== file.file_uuid
       && normalizedKnowledgeFileName(item.file_name) === normalizedKnowledgeFileName(nextName)
     ));
-    if (hasDuplicate && !window.confirm(`我的资料中已存在同名文件“${nextName}”，是否仍要使用这个名称？`)) return;
+    if (hasDuplicate && !(await confirmAppDialog({
+      title: '名称已存在',
+      message: `我的资料中已存在同名文件“${nextName}”。仍要使用这个名称吗？`,
+      confirmLabel: '仍然使用',
+    }))) return;
     setActionNotice('');
     try {
       const updated = await updateKnowledgeFileMetadata(file.file_uuid, { fileName: nextName });
@@ -1450,7 +1461,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
 
   const removeCategory = async (category: KnowledgeCategoryPayload) => {
-    if (!window.confirm(`确定删除资料分类“${category.name}”吗？删除后不可恢复。`)) return;
+    if (!(await confirmAppDialog({
+      title: '删除资料分类',
+      message: `确定删除“${category.name}”吗？删除后不可恢复。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     setCategoryNotice('');
     try {
       await deleteKnowledgeCategory(category.category_id);
@@ -1535,7 +1551,12 @@ export function KnowledgePage({ session }: KnowledgePageProps) {
   };
 
   const removeDocumentType = async (documentType: KnowledgeDocumentTypePayload) => {
-    if (!window.confirm(`确定删除文档类型“${documentType.name}”吗？删除后不可恢复。`)) return;
+    if (!(await confirmAppDialog({
+      title: '删除文档类型',
+      message: `确定删除“${documentType.name}”吗？删除后不可恢复。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     setDocumentTypeNotice('');
     try {
       await deleteKnowledgeDocumentType(documentType.document_type_id);

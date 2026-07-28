@@ -995,7 +995,6 @@ it('submits useful chat answer feedback to the learning loop', async () => {
 it('logs saved_as feedback when an answer is saved as experience', async () => {
   const experienceRequest = vi.fn();
   const feedbackRequest = vi.fn();
-  const promptSpy = vi.spyOn(window, 'prompt').mockReturnValue('商务投标');
   server.use(
     http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
     http.post('/api/ai/chat/prepare', () => HttpResponse.json({
@@ -1037,24 +1036,25 @@ it('logs saved_as feedback when an answer is saved as experience', async () => {
     }),
   );
 
-  try {
-    render(<ChatPage />);
-    await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '怎么写投标响应');
-    await userEvent.click(screen.getByRole('button', { name: '发送' }));
+  render(<ChatPage />);
+  await userEvent.type(await screen.findByLabelText('告诉我你想完成什么工作'), '怎么写投标响应');
+  await userEvent.click(screen.getByRole('button', { name: '发送' }));
 
-    expect(await screen.findByText('投标响应先列评分点。')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: '保存为经验' }));
-    await waitFor(() => expect(experienceRequest).toHaveBeenCalled());
-    await waitFor(() => expect(feedbackRequest).toHaveBeenCalledWith(expect.objectContaining({
-      conversation_id: 'session-save-experience',
-      message_id: 'assistant-message-save-experience',
-      feedback_type: 'save_experience',
-      saved_as: 'experience',
-    })));
-    expect(await screen.findByText('已保存为经验，后续类似问题会自动参考')).toBeInTheDocument();
-  } finally {
-    promptSpy.mockRestore();
-  }
+  expect(await screen.findByText('投标响应先列评分点。')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '保存为经验' }));
+  const experienceDialog = await screen.findByRole('dialog', { name: '保存为经验' });
+  const taskTypeField = within(experienceDialog).getByRole('textbox', { name: '保存为经验' });
+  await userEvent.clear(taskTypeField);
+  await userEvent.type(taskTypeField, '商务投标');
+  await userEvent.click(within(experienceDialog).getByRole('button', { name: '保存经验' }));
+  await waitFor(() => expect(experienceRequest).toHaveBeenCalled());
+  await waitFor(() => expect(feedbackRequest).toHaveBeenCalledWith(expect.objectContaining({
+    conversation_id: 'session-save-experience',
+    message_id: 'assistant-message-save-experience',
+    feedback_type: 'save_experience',
+    saved_as: 'experience',
+  })));
+  expect(await screen.findByText('已保存为经验，后续类似问题会自动参考')).toBeInTheDocument();
 });
 
 it('shows verifier-approved citations when the final answer omits the file name', async () => {
@@ -3086,9 +3086,6 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
   const archiveRequest = vi.fn();
   const restoreRequest = vi.fn();
   const hardDeleteRequest = vi.fn();
-  const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => {
-    throw new Error('trash hard delete should not depend on browser confirm');
-  });
   let resolveHardDelete: (() => void) | undefined;
   let activeItems = [{
     session_uuid: 'session-active',
@@ -3163,14 +3160,12 @@ it('manages chat sessions across active, archive, and trash lists', async () => 
   await waitFor(() => expect(screen.queryByRole('button', { name: '删除会话' })).not.toBeInTheDocument());
   expect(within(historyPane).getByText('任务已彻底删除')).toBeInTheDocument();
   expect(within(composer).queryByText('任务已彻底删除')).not.toBeInTheDocument();
-  expect(confirmSpy).not.toHaveBeenCalled();
-  confirmSpy.mockRestore();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 });
 
 it('confirms bulk archive and bulk delete operations', async () => {
   const bulkArchiveRequest = vi.fn();
   const bulkDeleteRequest = vi.fn();
-  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
   let activeItems = [
     {
       session_uuid: 'session-a',
@@ -3208,11 +3203,12 @@ it('confirms bulk archive and bulk delete operations', async () => {
   await userEvent.click(await screen.findByLabelText('选择任务：批量会话 A'));
   await userEvent.click(await screen.findByLabelText('选择任务：批量会话 B'));
   await userEvent.click(screen.getByRole('button', { name: '批量归档' }));
+  const archiveDialog = await screen.findByRole('dialog', { name: '批量归档任务' });
+  await userEvent.click(within(archiveDialog).getByRole('button', { name: '确认归档' }));
 
   await waitFor(() => expect(bulkArchiveRequest).toHaveBeenCalledWith({
     conversation_ids: ['session-a', 'session-b'],
   }));
-  expect(confirmSpy).toHaveBeenCalled();
 
   activeItems = [
     {
@@ -3236,9 +3232,10 @@ it('confirms bulk archive and bulk delete operations', async () => {
   await userEvent.click(await screen.findByLabelText('选择任务：批量会话 A'));
   await userEvent.click(await screen.findByLabelText('选择任务：批量会话 B'));
   await userEvent.click(screen.getByRole('button', { name: '批量删除' }));
+  const deleteDialog = await screen.findByRole('dialog', { name: '批量删除任务' });
+  await userEvent.click(within(deleteDialog).getByRole('button', { name: '确认删除' }));
 
   await waitFor(() => expect(bulkDeleteRequest).toHaveBeenCalledWith({
     conversation_ids: ['session-a', 'session-b'],
   }));
-  confirmSpy.mockRestore();
 });

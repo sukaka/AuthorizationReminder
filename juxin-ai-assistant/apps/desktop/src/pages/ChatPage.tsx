@@ -63,6 +63,7 @@ import {
   saveChatMessageWorkArtifact,
 } from '../api/client';
 import { ChatRunContext } from '../components/ChatRunContext';
+import { confirmAppDialog, promptAppDialog } from '../components/appDialog';
 import { cancelModelGeneration, generateLocalModel, listModelProfiles } from '../local/modelStream';
 import { isDesktopRuntime } from '../runtime/capabilities';
 import { openLocalWordFile } from '../runtime/downloads';
@@ -2257,7 +2258,12 @@ export function ChatPage({
 
   const saveMessageAsExperience = async (message: UiMessage) => {
     const question = previousUserQuestion(message.id);
-    const taskType = window.prompt('适用场景是什么？例如：商务投标、交付验收、会议纪要', modeLabels[mode])?.trim();
+    const taskType = (await promptAppDialog({
+      title: '保存为经验',
+      message: '请输入适用场景，例如：商务投标、交付验收、会议纪要。',
+      initialValue: modeLabels[mode],
+      confirmLabel: '保存经验',
+    }))?.trim();
     if (!taskType) return;
     try {
       await createLearningExperience({
@@ -2283,7 +2289,12 @@ export function ChatPage({
   };
 
   const saveMessageAsTemplate = async (message: UiMessage) => {
-    const templateName = window.prompt('模板名称是什么？', `${modeLabels[mode]}模板`)?.trim();
+    const templateName = (await promptAppDialog({
+      title: '保存为模板',
+      message: '请为这个回答设置模板名称。',
+      initialValue: `${modeLabels[mode]}模板`,
+      confirmLabel: '保存模板',
+    }))?.trim();
     if (!templateName) return;
     try {
       await createLearningTemplate({
@@ -2306,9 +2317,18 @@ export function ChatPage({
   };
 
   const recordMessageAsFailure = async (message: UiMessage) => {
-    const correction = window.prompt('正确做法是什么？请写下修正方式。')?.trim();
+    const correction = (await promptAppDialog({
+      title: '记录正确做法',
+      message: '请写下这次回答的修正方式。',
+      multiline: true,
+    }))?.trim();
     if (!correction) return;
-    const preventionRule = window.prompt('以后如何避免再犯？', '遇到类似问题时先检查这条修正规则。')?.trim() || correction;
+    const preventionRule = (await promptAppDialog({
+      title: '设置防复发规则',
+      message: '以后遇到类似问题时，应该先做什么？',
+      initialValue: '遇到类似问题时先检查这条修正规则。',
+      multiline: true,
+    }))?.trim() || correction;
     try {
       await createLearningFailureCase({
         task_type: modeLabels[mode],
@@ -2337,7 +2357,12 @@ export function ChatPage({
     feedbackType: 'useful' | 'not_useful' | 'needs_revision',
   ) => {
     const comment = feedbackType === 'needs_revision'
-      ? window.prompt('哪里需要修改？')?.trim()
+      ? (await promptAppDialog({
+          title: '需要修改',
+          message: '请说明哪里需要修改。',
+          multiline: true,
+          confirmLabel: '提交反馈',
+        }))?.trim()
       : '';
     if (feedbackType === 'needs_revision' && !comment) return;
     try {
@@ -2488,7 +2513,11 @@ export function ChatPage({
   );
 
   const renameSession = async (session: ChatSessionPayload) => {
-    const nextTitle = window.prompt('重命名任务', session.title)?.trim();
+    const nextTitle = (await promptAppDialog({
+      title: '重命名任务',
+      initialValue: session.title,
+      confirmLabel: '保存名称',
+    }))?.trim();
     if (!nextTitle) return;
     await runSessionAction(
       () => renameChatSession(session.session_uuid, nextTitle, projectUuid).then(() => undefined),
@@ -2542,7 +2571,11 @@ export function ChatPage({
 
   const bulkArchiveSessions = async () => {
     if (!selectedSessionIds.length) return;
-    if (!window.confirm(`确认归档选中的 ${selectedSessionIds.length} 个任务？`)) return;
+    if (!(await confirmAppDialog({
+      title: '批量归档任务',
+      message: `确认归档选中的 ${selectedSessionIds.length} 个任务吗？`,
+      confirmLabel: '确认归档',
+    }))) return;
     const ids = selectedSessionIds;
     try {
       const affected = await bulkArchiveChatSessions(ids, projectUuid);
@@ -2559,7 +2592,12 @@ export function ChatPage({
 
   const bulkDeleteSessions = async () => {
     if (!selectedSessionIds.length) return;
-    if (!window.confirm(`确认删除选中的 ${selectedSessionIds.length} 个任务？删除后可在回收站恢复。`)) return;
+    if (!(await confirmAppDialog({
+      title: '批量删除任务',
+      message: `确认删除选中的 ${selectedSessionIds.length} 个任务吗？删除后可在回收站恢复。`,
+      confirmLabel: '确认删除',
+      danger: true,
+    }))) return;
     const ids = selectedSessionIds;
     try {
       const affected = await bulkDeleteChatSessions(ids, projectUuid);

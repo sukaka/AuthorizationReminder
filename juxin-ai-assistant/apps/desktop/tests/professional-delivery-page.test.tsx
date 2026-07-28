@@ -747,6 +747,7 @@ it('shows a source-change audit notice without changing the delivered snapshot',
       });
     }),
     http.get('/api/ai/deliverables/deliverable-delivered', () => HttpResponse.json(deliveredDetail)),
+    http.get('/api/ai/deliverables/deliverable-delivered/draft', () => new HttpResponse(null, { status: 404 })),
     http.get('/api/ai/deliverables/deliverable-delivered/versions', () => HttpResponse.json({
       request_id: 'req-delivered-versions', deliverable_uuid: deliveredDetail.deliverable_uuid,
       items: [], total: 0, page: 1, page_size: 20,
@@ -848,6 +849,7 @@ it('completes review, approval, export, delivery, and archive against one immuta
       source_change_notice: null,
     })),
     http.get('/api/ai/deliverables/deliverable-flow', () => HttpResponse.json(currentDetail())),
+    http.get('/api/ai/deliverables/deliverable-flow/draft', () => new HttpResponse(null, { status: 404 })),
     http.get('/api/ai/deliverables/deliverable-flow/versions', () => HttpResponse.json({
       request_id: 'req-flow-versions', deliverable_uuid: 'deliverable-flow',
       items: [{

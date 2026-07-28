@@ -390,7 +390,6 @@ describe('local launcher', () => {
       savedOrigin: 'https://default.example.com',
       lastSuccessfulCheckAt: null,
     });
-    const confirm = vi.spyOn(window, 'confirm');
 
     render(<LauncherPage bridge={bridge} />);
     const input = await readyServerInput();
@@ -401,7 +400,7 @@ describe('local launcher', () => {
     await user.type(input, 'https://new.example.com');
     await user.click(screen.getByRole('button', { name: '测试连接' }));
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(screen.queryByRole('dialog', { name: '切换受信任服务器' })).not.toBeInTheDocument();
     expect(bridge.saveServerConfig).toHaveBeenCalledWith(
       'https://new.example.com',
     );
@@ -571,7 +570,6 @@ describe('local launcher', () => {
       savedOrigin: 'https://old.example.com',
       lastSuccessfulCheckAt: '2026-06-21T04:00:00Z',
     });
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
 
     render(<LauncherPage bridge={bridge} />);
     const input = await readyServerInput();
@@ -579,9 +577,11 @@ describe('local launcher', () => {
     await user.type(input, 'https://new.example.com');
     await user.click(screen.getByRole('button', { name: '测试连接' }));
 
-    expect(confirm).toHaveBeenCalledWith(
-      '远程服务将从 old.example.com 切换为 new.example.com。新服务器将成为本机数据同步和模型命令的受信任业务来源，是否继续？',
+    const switchDialog = await screen.findByRole('dialog', { name: '切换受信任服务器' });
+    expect(switchDialog).toHaveTextContent(
+      '远程服务将从 old.example.com 切换为 new.example.com。新服务器将成为本机数据同步和模型命令的受信任业务来源。',
     );
+    await user.click(screen.getByRole('button', { name: '取消' }));
     expect(bridge.saveServerConfig).not.toHaveBeenCalled();
     expect(
       screen.getByText('未更改远程服务地址，你可以继续修改或重新测试。'),

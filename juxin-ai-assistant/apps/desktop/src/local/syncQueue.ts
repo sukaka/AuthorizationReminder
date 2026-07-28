@@ -14,6 +14,13 @@ export type PendingResult = {
   nextRetryAt: number;
 };
 
+export type PendingSyncSummary = {
+  attempted: number;
+  synced: number;
+  failed: number;
+  pending: number;
+};
+
 type LocalQueueRecord = {
   readonly id: string;
   readonly payload: string;
@@ -79,10 +86,17 @@ export async function syncPendingResults(
   userId: string,
   now = Date.now(),
   options: { force?: boolean } = {},
-): Promise<void> {
+): Promise<PendingSyncSummary> {
   const current = await loadPendingResults(userId);
+  const summary: PendingSyncSummary = {
+    attempted: 0,
+    synced: 0,
+    failed: 0,
+    pending: current.length,
+  };
   for (const item of current) {
     if (!options.force && item.nextRetryAt > now) continue;
+    summary.attempted += 1;
     try {
       const response = await apiFetch(
         `/api/ai/generations/${encodeURIComponent(item.generationUuid)}/complete`,
@@ -101,10 +115,14 @@ export async function syncPendingResults(
       );
       if (!response.ok) throw new Error(`SYNC_${response.status}`);
       await removePendingResult(userId, item.generationUuid);
+      summary.synced += 1;
+      summary.pending -= 1;
     } catch {
+      summary.failed += 1;
       await reschedulePendingResult(userId, item, now);
     }
   }
+  return summary;
 }
 
 export async function logoutLocalUser(userId: string): Promise<void> {

@@ -160,8 +160,8 @@ it('shows AI governance pages to admin without user or server model forms', asyn
   const utilityNav = screen.getByRole('navigation', { name: '管理与设置' });
   expect(within(utilityNav).getByRole('button', { name: '帮助与反馈' })).toBeInTheDocument();
   await userEvent.click(within(utilityNav).getByRole('button', { name: '管理中心' }));
-  expect(screen.getByRole('button', { name: '任务管理' })).toBeInTheDocument();
-  const governanceNav = screen.getByRole('navigation', { name: '治理导航' });
+  expect(await screen.findByRole('button', { name: '任务管理' })).toBeInTheDocument();
+  const governanceNav = await screen.findByRole('navigation', { name: '治理导航' });
   expect(within(governanceNav).getByRole('button', { name: '助手模式' })).toBeInTheDocument();
   expect(within(governanceNav).getByRole('button', { name: '知识库' })).toBeInTheDocument();
   const settingsButton = within(governanceNav).getByRole('button', { name: '系统设置' });
@@ -903,7 +903,6 @@ it('supports preview download and delete actions for visible knowledge files', a
   const previewRequest = vi.fn();
   const deleteRequest = vi.fn();
   const renameRequest = vi.fn();
-  const renamePrompt = vi.spyOn(window, 'prompt').mockReturnValue('项目会议纪要.docx');
   const openDownload = vi.spyOn(window, 'open').mockReturnValue(null);
   session('employee');
   server.use(
@@ -1000,6 +999,11 @@ it('supports preview download and delete actions for visible knowledge files', a
   await userEvent.click(within(fileCard).getByRole('button', { name: '更多操作 会议纪要模板.docx' }));
   const renameMenu = within(fileCard).getByRole('menu', { name: '会议纪要模板.docx 更多操作' });
   await userEvent.click(within(renameMenu).getByRole('menuitem', { name: '重命名 会议纪要模板.docx' }));
+  const renameDialog = await screen.findByRole('dialog', { name: '重命名资料' });
+  const renameField = within(renameDialog).getByRole('textbox', { name: '重命名资料' });
+  await userEvent.clear(renameField);
+  await userEvent.type(renameField, '项目会议纪要.docx');
+  await userEvent.click(within(renameDialog).getByRole('button', { name: '保存名称' }));
   expect(renameRequest).toHaveBeenCalledWith({ file_name: '项目会议纪要.docx' });
   expect(await screen.findByText('已重命名为：项目会议纪要.docx')).toBeInTheDocument();
 
@@ -1011,7 +1015,6 @@ it('supports preview download and delete actions for visible knowledge files', a
   expect(screen.queryByText('会议纪要模板.docx')).not.toBeInTheDocument();
 
   openDownload.mockRestore();
-  renamePrompt.mockRestore();
 });
 
 it('summarizes a visible knowledge file with source labels', async () => {
@@ -2121,7 +2124,6 @@ it('lets administrators manage knowledge document types in a drawer and use them
   const createDocumentType = vi.fn();
   const updateDocumentType = vi.fn();
   const deleteDocumentType = vi.fn();
-  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
   session('admin');
   server.use(
     http.get('/api/knowledge/document-types', () => HttpResponse.json({
@@ -2202,8 +2204,10 @@ it('lets administrators manage knowledge document types in a drawer and use them
   const updatedRow = within(await screen.findByRole('table', { name: '文档类型字典表' })).getByRole('row', { name: /验收材料/ });
   await userEvent.click(within(updatedRow).getByRole('button', { name: '更多 验收材料' }));
   await userEvent.click(within(updatedRow).getByRole('menuitem', { name: '删除 验收材料' }));
+  const deleteDialog = await screen.findByRole('dialog', { name: '删除文档类型' });
+  expect(deleteDialog).toHaveTextContent('确定删除“验收材料”吗？删除后不可恢复。');
+  await userEvent.click(within(deleteDialog).getByRole('button', { name: '确认删除' }));
   await waitFor(() => expect(deleteDocumentType).toHaveBeenCalledTimes(1));
-  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('验收材料'));
   expect(within(screen.getByRole('table', { name: '文档类型字典表' })).queryByRole('row', { name: /验收材料/ })).not.toBeInTheDocument();
 
   await userEvent.click(screen.getByRole('tab', { name: '上传资料' }));
@@ -2213,7 +2217,6 @@ it('lets administrators manage knowledge document types in a drawer and use them
   );
   expect(screen.getByLabelText('文档类型')).toHaveTextContent('产品白皮书');
   expect(screen.getByLabelText('文档类型')).toHaveTextContent('解决方案');
-  confirmSpy.mockRestore();
 });
 
 it('shows administrator knowledge areas as tabs', async () => {
@@ -2293,7 +2296,6 @@ it('shows primary and secondary categories separately in the upload form', async
 
 it('warns and asks for confirmation before uploading a duplicate file name', async () => {
   session('admin');
-  const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
   server.use(
     http.get('/api/knowledge/files', () => HttpResponse.json({
       items: [{
@@ -2334,7 +2336,9 @@ it('warns and asks for confirmation before uploading a duplicate file name', asy
   expect(screen.getByText('检测到同名资料：管理员手册.docx。上传前需要再次确认。')).toBeInTheDocument();
   expect(screen.getByText('我的资料中已存在同名文件，上传时将再次确认')).toBeInTheDocument();
   await userEvent.click(screen.getByRole('button', { name: '开始上传' }));
-  expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining('我的资料中已存在以下同名文件'));
+  const duplicateDialog = await screen.findByRole('dialog', { name: '发现同名资料' });
+  expect(duplicateDialog).toHaveTextContent('我的资料中已存在以下同名文件');
+  await userEvent.click(within(duplicateDialog).getByRole('button', { name: '取消' }));
   expect(screen.getByText('已取消上传，请修改文件名或移除同名文件后再试。')).toBeInTheDocument();
 });
 

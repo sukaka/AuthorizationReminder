@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -44,6 +44,17 @@ class ProjectTaskCreateIn(StrictModel):
 
 class ProjectTaskStatusIn(StrictModel):
     status: Literal["todo", "in_progress", "blocked", "done", "cancelled"]
+
+
+class ProjectTaskUpdateIn(StrictModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="", max_length=20000)
+    priority: Literal["low", "normal", "high", "urgent"] = "normal"
+
+    @field_validator("title", "description", mode="before")
+    @classmethod
+    def strip_text(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
 
 
 class ProjectTaskOut(BaseModel):
@@ -337,6 +348,75 @@ async def update_project_task_status(
     db.commit()
     db.refresh(row)
     return _task_out(row)
+
+
+@router.put("/{project_uuid}/tasks/{task_uuid}", response_model=ProjectTaskOut)
+async def update_project_task(
+    project_uuid: str,
+    task_uuid: str,
+    body: ProjectTaskUpdateIn,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> ProjectTaskOut:
+    await _require_ai_use(request, session_payload, current_settings)
+    project, _member = _project(db, project_uuid, session_payload)
+    row = db.scalar(select(ProjectTask).where(ProjectTask.project_id == project.id, ProjectTask.uuid == task_uuid))
+    if row is None:
+        raise HTTPException(status_code=404, detail="项目任务不存在")
+    row.title = body.title
+    row.description = body.description
+    row.priority = body.priority
+    _activity(
+        db,
+        project.id,
+        str(session_payload.user.id),
+        action="project.task.update",
+        entity_type="task",
+        entity_uuid=row.uuid,
+        summary=f"更新任务：{row.title}",
+        metadata={"priority": row.priority},
+    )
+    _audit(db, session_payload, request, current_settings, action="project.task.update", project_uuid=project.uuid, entity_uuid=row.uuid)
+    db.commit()
+    db.refresh(row)
+    return _task_out(row)
+
+
+@router.delete("/{project_uuid}/tasks/{task_uuid}", status_code=204)
+async def delete_project_task(
+    project_uuid: str,
+    task_uuid: str,
+    request: Request,
+    session_payload: Annotated[SessionPayload, Depends(get_session)],
+    current_settings: Annotated[Settings, Depends(get_settings)],
+    db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    await _require_ai_use(request, session_payload, current_settings)
+    project, _member = _project(db, project_uuid, session_payload)
+    row = db.scalar(select(ProjectTask).where(ProjectTask.project_id == project.id, ProjectTask.uuid == task_uuid))
+    if row is None:
+        raise HTTPException(status_code=404, detail="项目任务不存在")
+    linked_deliverables = db.scalars(
+        select(ProjectDeliverable).where(ProjectDeliverable.task_id == row.id)
+    ).all()
+    for deliverable in linked_deliverables:
+        deliverable.task_id = None
+    _activity(
+        db,
+        project.id,
+        str(session_payload.user.id),
+        action="project.task.delete",
+        entity_type="task",
+        entity_uuid=row.uuid,
+        summary=f"删除任务：{row.title}",
+        metadata={"unlinked_deliverables": len(linked_deliverables)},
+    )
+    _audit(db, session_payload, request, current_settings, action="project.task.delete", project_uuid=project.uuid, entity_uuid=row.uuid)
+    db.delete(row)
+    db.commit()
+    return Response(status_code=204)
 
 
 @router.get("/{project_uuid}/deliverables", response_model=list[ProjectDeliverableOut])

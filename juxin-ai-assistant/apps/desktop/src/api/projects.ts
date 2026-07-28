@@ -522,6 +522,27 @@ export async function updateProjectTaskStatus(
   }), 'PROJECT_TASK_STATUS_FAILED');
 }
 
+export async function updateProjectTask(
+  projectUuid: string,
+  taskUuid: string,
+  payload: { title: string; description: string; priority: string },
+): Promise<ProjectTaskPayload> {
+  return readJson(await apiFetch(`/api/ai/projects/${projectUuid}/tasks/${taskUuid}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }), 'PROJECT_TASK_UPDATE_FAILED');
+}
+
+export async function deleteProjectTask(projectUuid: string, taskUuid: string): Promise<void> {
+  const response = await apiFetch(`/api/ai/projects/${projectUuid}/tasks/${taskUuid}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, 'PROJECT_TASK_DELETE_FAILED');
+  }
+}
+
 export async function listProjectDeliverables(projectUuid: string): Promise<ProjectDeliverablePayload[]> {
   return readJson(await apiFetch(`/api/ai/projects/${projectUuid}/deliverables`, { cache: 'no-store' }), 'PROJECT_DELIVERABLES_FAILED');
 }

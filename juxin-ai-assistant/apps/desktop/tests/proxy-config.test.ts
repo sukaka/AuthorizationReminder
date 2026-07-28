@@ -28,7 +28,8 @@ describe('desktop runtime API proxy config', () => {
     requiredApiPrefixes.forEach((prefix) => {
       expect(nginxConfig, `missing Nginx proxy coverage for ${prefix}`).toContain(prefix.replace('/api/', ''));
     });
-    expect(nginxConfig).toContain('proxy_pass http://ai-assistant-api:5193;');
+    expect(nginxConfig).toContain('set $ai_assistant_api_upstream http://ai-assistant-api:5193;');
+    expect(nginxConfig).toContain('proxy_pass $ai_assistant_api_upstream;');
   });
 });
 

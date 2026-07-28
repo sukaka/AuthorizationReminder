@@ -54,7 +54,7 @@ it('shows server-side model settings guidance and hides updater in web mode', as
   await userEvent.click(screen.getByRole('button', { name: '设置' }));
   expect(await screen.findByText('Web 端个人模型')).toBeInTheDocument();
   expect(screen.getByText('未配置个人模型时，会自动使用服务端统一模型。')).toBeInTheDocument();
-  expect(screen.getByText('DeepSeek 服务端模型')).toBeInTheDocument();
+  expect(await screen.findByText('DeepSeek 服务端模型')).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '检查应用更新' })).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '应用更新未启用' })).not.toBeInTheDocument();
 });

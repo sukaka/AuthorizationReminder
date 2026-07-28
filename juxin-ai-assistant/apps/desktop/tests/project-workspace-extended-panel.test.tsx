@@ -74,8 +74,8 @@ it('updates and removes project members from the permission panel', async () => 
   const updateMember = vi.fn();
   const removeMember = vi.fn();
   const members = [
-    { member_uuid: 'member-owner', user_id: 'u-owner', role: 'project_lead', status: 'active', invited_by: 'u-owner', created_at: '2026-07-13T00:00:00Z' },
-    { member_uuid: 'member-alice', user_id: 'alice', role: 'member', status: 'active', invited_by: 'u-owner', created_at: '2026-07-13T00:00:00Z' },
+    { member_uuid: 'member-owner', user_id: 'u-owner', username: '负责人', role: 'project_lead', status: 'active', invited_by: 'u-owner', created_at: '2026-07-13T00:00:00Z' },
+    { member_uuid: 'member-alice', user_id: 'alice', username: 'alice', role: 'member', status: 'active', invited_by: 'u-owner', created_at: '2026-07-13T00:00:00Z' },
   ];
   server.use(
     http.get(`/api/ai/projects/${projectUuid}/members`, () => HttpResponse.json(members)),
@@ -201,6 +201,7 @@ it('adds a project member from the enterprise user directory', async () => {
       return HttpResponse.json({
         member_uuid: 'member-lilei',
         user_id: '23',
+        username: '李雷',
         role: 'reviewer',
         status: 'active',
         invited_by: 'u-owner',
@@ -217,5 +218,5 @@ it('adds a project member from the enterprise user directory', async () => {
   await userEvent.click(screen.getByRole('button', { name: '添加成员' }));
 
   await waitFor(() => expect(addMember).toHaveBeenCalledWith({ user_id: '23', role: 'reviewer' }));
-  expect(await screen.findByText('23')).toBeInTheDocument();
+  expect(await screen.findByText('李雷')).toBeInTheDocument();
 });
