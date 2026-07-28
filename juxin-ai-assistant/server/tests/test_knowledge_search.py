@@ -490,6 +490,21 @@ def test_search_returns_empty_when_no_chunk_matches(generation_db) -> None:
     assert results == []
 
 
+def test_lexical_relevance_rejects_generic_form_words_without_a_business_term() -> None:
+    from app.knowledge_search import _has_lexical_relevance, _query_terms
+
+    terms = _query_terms("发我报销单填写说明")
+
+    assert not _has_lexical_relevance(
+        "策略功能说明、适用场景：填写多规则组合逻辑，便于运维追溯",
+        terms,
+    )
+    assert _has_lexical_relevance(
+        "报销单填写说明：请填写报销金额、费用类别和票据编号。",
+        terms,
+    )
+
+
 def test_personal_reference_search_ignores_unrelated_uploads(generation_db) -> None:
     from app.knowledge_search import search_personal_reference_chunks
 

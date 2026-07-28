@@ -523,6 +523,19 @@ def _extract_blocks(file_name: str, data: bytes) -> list[ParsedBlock]:
         blocks = _parse_pdf_blocks(data)
     else:
         blocks = _parse_docx_blocks(data)
+    # Image-only/scanned office documents may not expose any text to the
+    # format parser. Keep a small manifest chunk so an exact document-name
+    # request can still surface the original file for download.
+    if not blocks:
+        blocks = [ParsedBlock(
+            text=(
+                f"文档名称：{file_name}\n"
+                "该文档未提取到可检索的正文内容，但原文件已收录，可下载查看。"
+            ),
+            section_path="文件索引",
+            chunk_type="file_manifest",
+            metadata={"content_extraction": "filename_only"},
+        )]
     return _validate_extracted_blocks(blocks)
 
 

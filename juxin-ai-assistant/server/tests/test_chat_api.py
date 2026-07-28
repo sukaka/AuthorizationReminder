@@ -9,11 +9,13 @@ import httpx
 import respx
 from docx import Document
 from sqlalchemy import select
+from sqlalchemy.dialects import mysql
+from sqlalchemy.schema import CreateTable
 
 from app.config import get_settings
 from app.knowledge_files import create_knowledge_file_from_bytes
 from app.main import app
-from app.models import UserModelProfile, WebSearchLog
+from app.models import ChatMessageSource, UserModelProfile, WebSearchLog
 from app.web_sources import WebSearchResult
 
 
@@ -590,12 +592,14 @@ def test_chat_prepare_injects_learning_loop_context(client_for_user, generation_
 def test_latest_question_injects_web_search_context(client_for_user, monkeypatch, generation_db) -> None:
     from app import chat_service
 
+    long_url = "https://example.com/captcha?" + ("redirect=very-long-search-url&" * 20)
+
     def fake_search(_self, query: str, *, limit: int = 5, **_kwargs) -> list[WebSearchResult]:
         assert "最新 CVE" in query
         return [
             WebSearchResult(
                 title="NVD CVE-2026-12345",
-                url="https://nvd.nist.gov/vuln/detail/CVE-2026-12345",
+                url=long_url,
                 site_name="nvd.nist.gov",
                 snippet="NVD 漏洞条目摘要。",
                 fetched_at=datetime(2026, 7, 3, tzinfo=UTC),
@@ -614,7 +618,7 @@ def test_latest_question_injects_web_search_context(client_for_user, monkeypatch
     body = prepared.json()
     assert body["completed"] is False
     assert "【联网搜索结果】" in body["messages"][0]["content"]
-    assert "https://nvd.nist.gov/vuln/detail/CVE-2026-12345" in body["messages"][0]["content"]
+    assert long_url in body["messages"][0]["content"]
     assert body["citations"][0]["source_type"] == "web_search_context"
     assert body["citations"][0]["file_name"] == "NVD CVE-2026-12345"
     assert body["task_state"]["tool_calls"][-1]["tool_name"] == "web_search"
@@ -623,6 +627,12 @@ def test_latest_question_injects_web_search_context(client_for_user, monkeypatch
     assert log is not None
     assert log.status == "ok"
     assert log.answer_message_id == body["assistant_message_uuid"]
+
+
+def test_chat_message_source_section_title_uses_text_in_mysql() -> None:
+    ddl = str(CreateTable(ChatMessageSource.__table__).compile(dialect=mysql.dialect()))
+
+    assert "section_title TEXT NOT NULL" in ddl
 
 
 def test_latest_question_web_search_failure_records_task_state_and_continues(

@@ -779,7 +779,7 @@ services:
       AUDIT_HASH_SALT: ${AI_ASSISTANT_AUDIT_HASH_SALT}
       AI_LOCAL_BINDING_SECRET: ${AI_LOCAL_BINDING_SECRET}
       PUBLIC_URL: "${AI_ASSISTANT_PUBLIC_URL:-http://${PUBLIC_HOST:-localhost}:18093}"
-      CORS_ORIGINS: "http://localhost:18093,http://127.0.0.1:18093,http://${PUBLIC_HOST:-localhost}:18093,${AI_ASSISTANT_PUBLIC_URL:-http://${PUBLIC_HOST:-localhost}:18093}"
+      CORS_ORIGINS: "http://localhost:18093,http://127.0.0.1:18093,http://${PUBLIC_HOST:-localhost}:18093,${AI_ASSISTANT_PUBLIC_URL:-http://${PUBLIC_HOST:-localhost}:18093},${AI_ASSISTANT_EXTRA_ORIGINS:-}"
       SERVER_MODEL_BASE_URL: ${AI_ASSISTANT_SERVER_MODEL_BASE_URL:-}
       SERVER_MODEL_API_KEY: ${AI_ASSISTANT_SERVER_MODEL_API_KEY:-}
       SERVER_MODEL_ID: ${AI_ASSISTANT_SERVER_MODEL_ID:-}
@@ -794,13 +794,24 @@ services:
       KNOWLEDGE_KEYWORD_INDEX_ENABLED: "true"
       KNOWLEDGE_KEYWORD_INDEX_DIR: "/data/ai-assistant/keyword-index/current"
       KNOWLEDGE_STORAGE_DIR: "/data/ai-assistant/knowledge"
+      EXPORT_STORAGE_DIR: "/data/ai-assistant/dashi-ppt-exports"
       DESKTOP_UPDATE_STORAGE_DIR: /data/ai-assistant/desktop-updates
       DESKTOP_UPDATE_MAX_BYTES: ${AI_DESKTOP_UPDATE_MAX_BYTES:-1073741824}
       DESKTOP_UPDATE_PUBLIC_BASE_URL: ${AI_DESKTOP_UPDATE_PUBLIC_BASE_URL:-}
+      # The Dashi runtime root is the `project` child; its parent also contains
+      # the fixed theme-preview asset served by the authenticated API endpoint.
+      DASHI_PPT_RUNTIME_ROOT: /opt/dashi-ppt/project
     volumes:
       - ai-assistant-updates:/data/ai-assistant/desktop-updates
       - ai-assistant-keyword-index:/data/ai-assistant/keyword-index
       - ai-assistant-knowledge:/data/ai-assistant/knowledge
+      - ai-assistant-dashi-ppt-exports:/data/ai-assistant/dashi-ppt-exports
+      - ${DASHI_PPT_RUNTIME_HOST_PATH}/..:/opt/dashi-ppt:ro
+      # The runtime source is prepared on macOS, while the API runs on Linux.
+      # Keep native Node dependencies in a Docker volume so esbuild uses the
+      # Linux binary without modifying the host runtime.
+      - dashi-ppt-node-modules:/opt/dashi-ppt/project/node_modules
+      - dashi-ppt-output:/opt/dashi-ppt/project/output
     depends_on:
       ai-assistant-db-init:
         condition: service_completed_successfully
@@ -1333,9 +1344,12 @@ services:
 volumes:
   ai-assistant-updates:
   ai-assistant-knowledge:
+  ai-assistant-dashi-ppt-exports:
   qdrant-data:
   ai-assistant-redis-data:
   ai-assistant-keyword-index:
+  dashi-ppt-node-modules:
+  dashi-ppt-output:
   mysql-data:
   faq-data:
   tender-data:

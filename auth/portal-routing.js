@@ -25,7 +25,6 @@ const SYSTEM_ACCESS_KEYS = Object.freeze([
 const BUSINESS_SYSTEM_ACCESS_KEYS = Object.freeze(
   SYSTEM_ACCESS_KEYS.filter((key) => key !== ADMIN_CENTER_KEY && key !== AUDIT_CENTER_KEY)
 );
-const REQUIRED_BUSINESS_PORTAL_KEYS = Object.freeze(['train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant']);
 
 const normalizePortalRole = (role) => String(role || '').trim().toLowerCase();
 const normalizeSystemAccessKey = (key) => {
@@ -55,7 +54,7 @@ const defaultAppAccessByRole = (role) => {
   if (normalizedRole === 'auditor') return [AUDIT_CENTER_KEY, DELIVERY_KEY, 'ai-assistant'];
   if (normalizedRole === 'editor') return ['faq', 'tender', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
   if (normalizedRole === 'reviewer') return ['faq', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
-  return ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant'];
+  return ['train-exam', 'ai-assistant'];
 };
 
 const resolveUserAppAccess = (user) => {
@@ -73,11 +72,6 @@ const resolveUserAppAccess = (user) => {
         .filter((item) => BUSINESS_SYSTEM_ACCESS_KEYS.includes(item))
     )
   );
-  if (!['sysadmin', 'auditor'].includes(normalizedRole)) {
-    for (const key of REQUIRED_BUSINESS_PORTAL_KEYS) {
-      if (!normalized.includes(key)) normalized.push(key);
-    }
-  }
   return normalized;
 };
 

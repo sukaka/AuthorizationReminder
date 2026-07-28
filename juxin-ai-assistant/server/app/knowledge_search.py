@@ -39,6 +39,15 @@ MIN_FILE_COVERAGE = 3
 MIN_LEXICAL_MATCH_TERMS = 2
 OFFICIAL_INDEX_CACHE_TTL_SECONDS = 60.0
 
+# These words describe how a user asks for a document rather than what the
+# document is about.  They must not make an unrelated chunk relevant on their
+# own (for example, “发我报销单填写说明” must not match a product manual only
+# because it contains “填写…说明”).
+GENERIC_RETRIEVAL_TERMS = frozenset({
+    "发我", "给我", "帮我", "请发", "下载", "查看", "提供", "获取",
+    "填写", "说明", "怎么", "如何", "什么", "一下", "需要", "请问",
+})
+
 EXHAUSTIVE_QUERY_MARKERS = (
     "全部", "完整", "所有", "全量", "逐项", "逐条", "一览", "不遗漏",
 )
@@ -483,10 +492,22 @@ def _metadata_bonus(metadata: dict | None, terms: list[str]) -> int:
 def _has_lexical_relevance(text: str, terms: list[str]) -> bool:
     lowered = text.lower()
     matched = {term for term in terms if term and term in lowered}
-    return (
+    has_sufficient_matches = (
         len(matched) >= MIN_LEXICAL_MATCH_TERMS
         or any(len(term) >= 6 for term in matched)
     )
+    if not has_sufficient_matches:
+        return False
+
+    # Chinese two-character terms are the primary lexical retrieval unit. If
+    # the question has a domain-specific term, require that term (or another
+    # non-generic query term) to occur in the candidate as well.
+    anchor_terms = {
+        term
+        for term in terms
+        if len(term) >= 2 and term not in GENERIC_RETRIEVAL_TERMS
+    }
+    return not anchor_terms or bool(matched & anchor_terms)
 
 
 def _retrieved_from_row(

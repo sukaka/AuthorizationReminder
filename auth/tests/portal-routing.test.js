@@ -28,8 +28,8 @@ test('admin defaults to delivery instead of ticketing and sec-impl', () => {
   assert.equal(access.includes('sec-impl'), false);
 });
 
-test('ordinary business roles receive unified big-screen portal access', () => {
-  for (const role of ['editor', 'reviewer', 'user']) {
+test('editor and reviewer defaults retain their explicitly scoped big-screen portal access', () => {
+  for (const role of ['editor', 'reviewer']) {
     assert.ok(defaultAppAccessByRole(role).includes('big-screen'), `${role} should include big-screen`);
   }
 });
@@ -38,6 +38,10 @@ test('ordinary business roles receive unified AI assistant portal access', () =>
   for (const role of ['editor', 'reviewer', 'user']) {
     assert.ok(defaultAppAccessByRole(role).includes('ai-assistant'), `${role} should include ai-assistant`);
   }
+});
+
+test('ordinary user defaults to only training exams and AI assistant', () => {
+  assert.deepEqual(defaultAppAccessByRole('user'), ['train-exam', 'ai-assistant']);
 });
 
 test('system and audit administrators receive AI assistant access for their scoped actions', () => {
@@ -116,7 +120,7 @@ test('sysadmin and auditor ignore legacy non-dedicated app_access', () => {
 test('legacy ticketing and sec-impl access folds into delivery once', () => {
   assert.deepEqual(
     resolveUserAppAccess({ role: 'editor', app_access: '["ticketing","sec-impl","faq"]' }),
-    ['delivery', 'faq', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant']
+    ['delivery', 'faq']
   );
 });
 
@@ -124,11 +128,15 @@ test('editor defaults include software composition analysis access', () => {
   assert.ok(defaultAppAccessByRole('editor').includes('sca'));
 });
 
-test('legacy business users receive software composition analysis portal access', () => {
+test('stored app access is authoritative for ordinary users', () => {
   assert.deepEqual(
-    resolveUserAppAccess({ role: 'user', app_access: '["reminder"]' }),
-    ['reminder', 'train-exam', 'prompt-center', 'sca', 'big-screen', 'ai-assistant']
+    resolveUserAppAccess({ role: 'user', app_access: '["train-exam","ai-assistant"]' }),
+    ['train-exam', 'ai-assistant']
   );
+});
+
+test('stored app access is not expanded with ungranted business systems', () => {
+  assert.deepEqual(resolveUserAppAccess({ role: 'user', app_access: '["reminder"]' }), ['reminder']);
 });
 
 test('dedicated center config exposes admin and audit metadata', () => {

@@ -371,7 +371,31 @@ it('restores a failed background task with its draft and retries it', async () =
   expect(tray).toHaveTextContent('正在重新处理');
   await userEvent.click(within(tray).getByRole('button', { name: '取消' }));
   expect(cancel).toHaveBeenCalledOnce();
-  expect(tray).toHaveTextContent('已取消');
+  await waitFor(() => expect(screen.queryByRole('region', { name: '后台任务' })).not.toBeInTheDocument());
+});
+
+it('does not keep completed background tasks in the chat tray', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', {
+    configurable: true,
+    value: undefined,
+  });
+  server.use(
+    http.get('/api/conversations', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/model-profiles', () => HttpResponse.json({ items: [], total: 0 })),
+    http.get('/api/ai/long-tasks', () => HttpResponse.json({
+      items: [{
+        task_id: 'long-completed', task_type: 'chat_generation', title: '已完成的 CCMP PPT',
+        conversation_id: 'session-completed', message_uuid: 'assistant-completed',
+        status: 'completed', stage: 'completed', progress: 100, attempt: 1, draft: '',
+        error_code: '', error_message: '', retry_allowed: false, cancel_allowed: false,
+        created_at: '2026-07-10T04:00:00Z', updated_at: '2026-07-10T04:01:00Z',
+      }], total: 1,
+    })),
+  );
+
+  render(<ChatPage />);
+
+  await waitFor(() => expect(screen.queryByRole('region', { name: '后台任务' })).not.toBeInTheDocument());
 });
 
 it('detects explicit memory trigger phrases without saving sensitive content', () => {

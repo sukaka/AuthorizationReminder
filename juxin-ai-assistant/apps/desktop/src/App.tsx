@@ -378,7 +378,7 @@ function Workspace({ session }: { session: SessionPayload }) {
               </span>
             ) : null}
           </button>
-          <button aria-label="AI 能力" title="AI 能力" aria-current={isAiCapabilityPage ? 'page' : undefined} className={isAiCapabilityPage ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">AI 能力</span></button>
+          {isAdmin ? <button aria-label="AI 能力" title="AI 能力" aria-current={isAiCapabilityPage ? 'page' : undefined} className={isAiCapabilityPage ? 'is-current' : ''} onClick={() => setPage('assistants')} type="button"><span className="nav-icon" aria-hidden="true">✦</span><span className="nav-label">AI 能力</span></button> : null}
           <button aria-label="知识与学习" title="知识与学习" aria-current={isKnowledgeLearningPage ? 'page' : undefined} className={isKnowledgeLearningPage ? 'is-current' : ''} onClick={() => setPage('knowledge')} type="button"><span className="nav-icon" aria-hidden="true">⌘</span><span className="nav-label">知识与学习</span></button>
           {canViewEnterprise ? <button aria-label="企业洞察" title="企业洞察" aria-current={isEnterpriseInsightPage ? 'page' : undefined} className={isEnterpriseInsightPage ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true">◉</span><span className="nav-label">企业洞察</span></button> : null}
         </nav>

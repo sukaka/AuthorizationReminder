@@ -15,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.mysql import MEDIUMBLOB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from . import governance_models as governance_models
@@ -23,6 +24,10 @@ from .database import Base
 
 primary_key_type = BigInteger().with_variant(Integer, "sqlite")
 foreign_key_type = BigInteger().with_variant(Integer, "sqlite")
+# Long-running chat/PPT requests include prepared context and can exceed MySQL
+# BLOB's 64 KiB limit after encryption.  Keep SQLite's portable BLOB type while
+# allocating sufficient room in production MySQL.
+long_task_payload_type = LargeBinary().with_variant(MEDIUMBLOB, "mysql")
 
 
 class TimestampMixin:
@@ -825,9 +830,9 @@ class LongTask(TimestampMixin, Base):
     progress: Mapped[int] = mapped_column(Integer, default=0)
     attempt: Mapped[int] = mapped_column(Integer, default=1)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    request_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    request_ciphertext: Mapped[bytes] = mapped_column(long_task_payload_type)
     request_nonce: Mapped[bytes] = mapped_column(LargeBinary)
-    draft_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
+    draft_ciphertext: Mapped[bytes] = mapped_column(long_task_payload_type, default=b"")
     draft_nonce: Mapped[bytes] = mapped_column(LargeBinary, default=b"")
     key_version: Mapped[str] = mapped_column(String(32), default="v1")
     checkpoint_json: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -1591,9 +1596,13 @@ class ChatMessageSource(TimestampMixin, Base):
     source_uuid: Mapped[str] = mapped_column(String(64), default="")
     title: Mapped[str] = mapped_column(String(255), default="")
     file_name: Mapped[str] = mapped_column(String(255), default="")
-    chunk_id: Mapped[str] = mapped_column(String(64), default="")
+    # Web-search sources use their original URL as the identifier.  It can be
+    # substantially longer than the 64-character vector-store chunk id.
+    chunk_id: Mapped[str] = mapped_column(Text, default="")
     page_number: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    section_title: Mapped[str] = mapped_column(String(255), default="")
+    # Web citations may use a canonical URL as their location label.  Those
+    # URLs can exceed VARCHAR(255), particularly after search-engine redirects.
+    section_title: Mapped[str] = mapped_column(Text, default="")
     chunk_index: Mapped[int | None] = mapped_column(Integer, nullable=True)
     score: Mapped[int] = mapped_column(Integer, default=0)
 

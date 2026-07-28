@@ -30,6 +30,7 @@ def test_chat_ppt_intent_distinguishes_create_revision_and_information() -> None
     assert detect_dashi_ppt_intent("把上一版第二页改成风险分析") is None
     assert detect_dashi_ppt_intent("PPT 是什么意思") is None
     assert detect_dashi_ppt_intent("如何制作一份好看的 PPT") is None
+    assert detect_dashi_ppt_intent("帮我写一份制作 CCMP 功能介绍 PPT 的提示词，不要直接制作 PPT") is None
 
 
 def test_chat_ppt_confirmation_requires_style_and_media_choice() -> None:

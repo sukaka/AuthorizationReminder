@@ -1526,7 +1526,10 @@ export async function exportChatWord(payload: {
   const meta = await readJson<{ file_name: string; download_url: string }>(
     await apiFetch('/api/export/word', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': crypto.randomUUID(),
+      },
       body: JSON.stringify({
         conversation_id: payload.conversationId,
         ...(payload.messageId ? { message_id: payload.messageId } : {}),
@@ -1550,7 +1553,10 @@ export async function exportKnowledgeContentWord(payload: {
   const meta = await readJson<{ file_name: string; download_url: string }>(
     await apiFetch('/api/export/word/content', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': crypto.randomUUID(),
+      },
       body: JSON.stringify({
         title: payload.title,
         content: payload.content,

@@ -70,6 +70,15 @@ def _xlsx_bytes(rows: list[list[str]], *, sheet_name: str = "Sheet1") -> bytes:
     return buffer.getvalue()
 
 
+def _empty_docx_bytes() -> bytes:
+    from docx import Document
+
+    document = Document()
+    buffer = BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
 def _pptx_bytes(slides: list[tuple[str, str]], notes: list[str] | None = None) -> bytes:
     buffer = BytesIO()
     notes = notes or []
@@ -218,6 +227,33 @@ def test_create_knowledge_file_extracts_xlsx_table_rows(generation_db) -> None:
     assert "资料名称 | 业务场景" in payload["text"]
     assert "资料名称=白皮书" in payload["text"]
     assert "业务场景=正式知识库" in payload["text"]
+
+
+def test_create_knowledge_file_indexes_name_when_docx_has_no_extractable_text(generation_db) -> None:
+    from app.knowledge_files import create_knowledge_file_from_bytes
+
+    file_record, chunks = create_knowledge_file_from_bytes(
+        generation_db,
+        sso_user_id="user-1",
+        file_name="报销单填写说明.docx",
+        content=_empty_docx_bytes(),
+        content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        cipher=_cipher(),
+        key_version="v1",
+    )
+
+    assert file_record.file_name == "报销单填写说明.docx"
+    assert len(chunks) == 1
+    assert chunks[0].section_title == "文件索引"
+    assert chunks[0].metadata_json["content_extraction"] == "filename_only"
+    payload = _cipher().decrypt_json(
+        EncryptedPayload(
+            ciphertext=chunks[0].chunk_text_ciphertext,
+            nonce=chunks[0].chunk_text_nonce,
+        ),
+        chunks[0].chunk_id.encode(),
+    )
+    assert "报销单填写说明.docx" in payload["text"]
 
 
 def test_create_knowledge_file_generates_real_embedding_metadata(generation_db) -> None:

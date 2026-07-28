@@ -2,12 +2,27 @@ import asyncio
 from unittest.mock import Mock
 
 from sqlalchemy import select
+from sqlalchemy.dialects import mysql
+from sqlalchemy.schema import CreateTable
 
 from app.config import get_settings
 from app.crypto import ContentCipher
-from app.long_tasks import LongTaskExecutor, LongTaskService
+from app.long_tasks import LongTaskExecutor, LongTaskService, _safe_failure_message
 from app.models import LongTask, WorkflowNotificationOutbox
 from app.server_model_client import ServerModelStreamEvent
+
+
+def test_long_task_encrypted_payloads_use_mediumblob_in_mysql() -> None:
+    ddl = str(CreateTable(LongTask.__table__).compile(dialect=mysql.dialect()))
+
+    assert "request_ciphertext MEDIUMBLOB NOT NULL" in ddl
+    assert "draft_ciphertext MEDIUMBLOB NOT NULL" in ddl
+
+
+def test_dashi_ppt_failures_are_not_reported_as_model_or_web_failures() -> None:
+    assert _safe_failure_message("DASHI_PPT_PPTX_FAILED: export failed") == (
+        "大师 PPT 渲染或导出失败，已保留当前草稿；请检查运行时后重试"
+    )
 
 
 def _prepare_chat(client):

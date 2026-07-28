@@ -182,7 +182,7 @@ it('hides admin-only entries from sysadmin users', async () => {
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   const mainNav = screen.getByRole('navigation', { name: '主导航' });
-  expect(within(mainNav).getByRole('button', { name: 'AI 能力' })).toBeInTheDocument();
+  expect(within(mainNav).queryByRole('button', { name: 'AI 能力' })).not.toBeInTheDocument();
   expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
   expect(within(mainNav).getByRole('button', { name: '知识与学习' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();
@@ -199,7 +199,7 @@ it('shows scoped department data and suggestions to non-admin department manager
   expect(await screen.findByRole('region', { name: '私人工作助理工作区' })).toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '工作台' })).not.toBeInTheDocument();
   const mainNav = screen.getByRole('navigation', { name: '主导航' });
-  expect(within(mainNav).getByRole('button', { name: 'AI 能力' })).toBeInTheDocument();
+  expect(within(mainNav).queryByRole('button', { name: 'AI 能力' })).not.toBeInTheDocument();
   expect(within(mainNav).getByRole('button', { name: '任务与交付' })).toBeInTheDocument();
   expect(within(mainNav).getByRole('button', { name: '知识与学习' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '设置' })).toBeInTheDocument();

@@ -5380,13 +5380,32 @@ app.get('/portal', async (req, res) => {
         throw new Error('当前账号没有可进入的系统');
       }
       const privilegedDefaultSystemKey = privilegedDefaultSystemKeyByRole[userRole] || '';
+      // App endpoints are configured with a deployment default (usually the
+      // LAN address).  Keep their port and path, but use the hostname through
+      // which this portal was actually opened so the same login works from
+      // both the intranet and the public IP.
+      function useCurrentPortalHost(rawUrl) {
+        try {
+          const target = new URL(String(rawUrl || ''), window.location.origin);
+          const current = new URL(window.location.origin);
+          if (target.protocol === 'http:' || target.protocol === 'https:') {
+            target.hostname = current.hostname;
+          }
+          return target.toString();
+        } catch (_err) {
+          return String(rawUrl || '');
+        }
+      }
+      function appEntryUrl(app, token) {
+        return appendPortalSession(useCurrentPortalHost(app.url), appSsoToken(app, token));
+      }
       if (portalMode !== 'switch' && privilegedDefaultSystemKey) {
         const preferred = list.find((item) => item.key === privilegedDefaultSystemKey) || list[0];
         if (preferred) {
           if (shouldThrottleRequestedRedirect(preferred.key)) {
             hideAllCards();
           } else {
-            const preferredUrl = appendPortalSession(preferred.url, appSsoToken(preferred, ssoToken));
+            const preferredUrl = appEntryUrl(preferred, ssoToken);
             showPortalRedirecting(preferred.name, preferred.url);
             window.location.href = preferredUrl;
             return;
@@ -5399,7 +5418,7 @@ app.get('/portal', async (req, res) => {
           if (shouldThrottleRequestedRedirect(requestedSystem)) {
             hideAllCards();
           } else {
-            const targetUrl = appendPortalSession(target.url, appSsoToken(target, ssoToken));
+            const targetUrl = appEntryUrl(target, ssoToken);
             showPortalRedirecting(target.name, target.url);
             window.location.href = targetUrl;
             return;
@@ -5407,7 +5426,7 @@ app.get('/portal', async (req, res) => {
         }
       }
       list.forEach(app=>{
-        const appUrl = appendPortalSession(app.url, appSsoToken(app, ssoToken));
+        const appUrl = appEntryUrl(app, ssoToken);
         const div = document.createElement('div');
         div.className = 'app-item';
         const btn = document.createElement('button');

@@ -25,6 +25,7 @@ _CREATE_ACTIONS = ("生成", "制作", "创建", "做一份", "做个", "帮我�
 _REVISE_ACTIONS = ("调整", "修改", "改成", "改为", "替换", "增加", "新增", "删除", "重做", "优化", "换成")
 _REVISION_REFERENCES = ("上一版", "上一个", "刚才", "这份", "那个", "原来的", "前一版")
 _INFORMATION_MARKERS = ("什么是", "是什么意思", "如何制作", "怎么制作", "制作方法", "教程", "为什么")
+_PROMPT_REQUEST_MARKERS = ("提示词", "提示语", "prompt")
 _SLIDE_REFERENCE_PATTERN = re.compile(r"(?:第?[一二三四五六七八九十百零两\d]+页|封面|目录页|结尾页|最后一页)")
 _CONTENT_LAYOUTS = (
     "theme01_page010",
@@ -71,7 +72,11 @@ class ChatPptContext:
 
 def detect_dashi_ppt_intent(question: str, *, has_previous: bool = False) -> PptIntent | None:
     normalized = "".join(str(question).casefold().split())
-    if not normalized or any(marker in normalized for marker in _INFORMATION_MARKERS):
+    if (
+        not normalized
+        or any(marker in normalized for marker in _INFORMATION_MARKERS)
+        or any(marker in normalized for marker in _PROMPT_REQUEST_MARKERS)
+    ):
         return None
     has_deck_noun = any(noun in normalized for noun in _PPT_NOUNS)
     has_revision_action = any(action in normalized for action in _REVISE_ACTIONS)

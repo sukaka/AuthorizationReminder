@@ -47,6 +47,8 @@ COPY server/alembic.ini ./alembic.ini
 COPY server/alembic ./alembic
 COPY server/catalog ./catalog
 COPY server/scripts ./scripts
+COPY server/harness_spec.json ./harness_spec.json
+COPY server/tests ./tests
 COPY agent-harness ./agent-harness
 
 RUN adduser --disabled-password --gecos "" appuser \

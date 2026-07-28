@@ -543,6 +543,8 @@ class LongTaskExecutor:
 
 
 def _safe_failure_message(code: str) -> str:
+    if code.startswith("DASHI_PPT_"):
+        return "大师 PPT 渲染或导出失败，已保留当前草稿；请检查运行时后重试"
     if code == "SERVER_MODEL_NOT_CONFIGURED":
         return "当前没有可用模型，请完成模型设置后重试"
     if code == "SERVER_MODEL_AUTH_FAILED":

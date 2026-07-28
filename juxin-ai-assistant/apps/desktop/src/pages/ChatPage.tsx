@@ -1032,6 +1032,12 @@ export function ChatPage({
   const [generationMetrics, setGenerationMetrics] = useState<GenerationMetrics | null>(null);
   const [webModelLabel, setWebModelLabel] = useState('服务端模型');
   const [longTasks, setLongTasks] = useState<LongTaskPayload[]>([]);
+  // The chat tray is a live work indicator, not a task history. Completed and
+  // cancelled runs remain available in the task center and conversation, but
+  // should not keep occupying the chat page.
+  const visibleLongTasks = longTasks.filter((task) => (
+    task.cancel_allowed || task.retry_allowed || task.status === 'waiting_user'
+  ));
   const selectMode = (selection: ChatModeSelection) => {
     setModeSelection(selection);
     setRoutedMode(selection === 'auto' ? 'normal' : selection);
@@ -1404,8 +1410,25 @@ export function ChatPage({
         isComplete: true,
       })));
       setStatus('');
-    } catch {
+    } catch (error) {
       if (activeSessionUuidRef.current === sessionUuid) {
+        // A task can be explicitly cleared while its old session URL remains
+        // open.  Treat that expected 404 as a stale selection rather than a
+        // generic history-loading failure.
+        if (error instanceof ApiError && error.status === 404) {
+          activeSessionUuidRef.current = '';
+          activeGenerationKeyRef.current = '';
+          setActiveSessionUuid('');
+          setActiveSessionStatus('');
+          setMessages([]);
+          setTaskProgress(null);
+          onLocationChangeRef.current?.({
+            projectUuid: requestedProjectUuid || '',
+            sessionUuid: '',
+          });
+          setStatus('该历史任务已被清理');
+          return;
+        }
         setStatus('历史任务加载失败');
       }
     }
@@ -3616,14 +3639,14 @@ export function ChatPage({
               </div>
             </div>
           ) : null}
-          {longTasks.length ? (
+          {visibleLongTasks.length ? (
             <aside aria-label="后台任务" className="chat-long-task-tray" role="region">
               <div className="chat-long-task-head">
                 <strong>后台任务</strong>
-                <span>{longTasks.filter((task) => task.cancel_allowed).length} 个处理中</span>
+                <span>{visibleLongTasks.filter((task) => task.cancel_allowed).length} 个处理中</span>
               </div>
               <div className="chat-long-task-list">
-                {longTasks.slice(0, 3).map((task) => (
+                {visibleLongTasks.slice(0, 3).map((task) => (
                   <article className="chat-long-task-item" key={task.task_id}>
                     <div className="chat-long-task-title">
                       <strong title={task.title}>{task.title}</strong>
@@ -3646,9 +3669,6 @@ export function ChatPage({
                       ) : null}
                       {task.cancel_allowed ? (
                         <button onClick={() => void cancelBackgroundTask(task.task_id)} type="button">取消</button>
-                      ) : null}
-                      {task.status === 'completed' ? (
-                        <button onClick={() => void loadSession(task.conversation_id)} type="button">查看结果</button>
                       ) : null}
                     </div>
                   </article>

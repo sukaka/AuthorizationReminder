@@ -137,7 +137,10 @@ describe('web downloads', () => {
 
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/export/word',
-      expect.objectContaining({ credentials: 'include' }),
+      expect.objectContaining({
+        credentials: 'include',
+        headers: expect.objectContaining({ 'Idempotency-Key': expect.any(String) }),
+      }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/export/download/chat-export',
