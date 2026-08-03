@@ -100,7 +100,7 @@ class NativeRuntime:
                 run_id=row.uuid,
                 status=row.status,
                 stage=row.stage,
-                progress=int(row.progress or 0),
+                progress=self.service.public_progress(row),
                 model_calls=int(row.model_calls or 0),
                 result=row.result_json if isinstance(row.result_json, dict) else {},
                 error_code="RUN_LEASE_HELD",
@@ -158,16 +158,57 @@ class NativeRuntime:
                 run_id=row.uuid,
                 status=row.status,
                 stage=row.stage,
-                progress=int(row.progress or 0),
+                progress=self.service.public_progress(row),
                 model_calls=int(row.model_calls or 0),
                 result=row.result_json if isinstance(row.result_json, dict) else {},
                 error_code="RUN_LEASE_LOST",
                 error_message_safe="任务执行租约已失效，已停止当前执行器",
             )
+        except Exception as exc:
+            terminal_statuses = {
+                AgentRunStatus.SUCCEEDED.value,
+                AgentRunStatus.COMPLETED.value,
+                AgentRunStatus.FAILED.value,
+                AgentRunStatus.CANCELLED.value,
+            }
+            try:
+                if row.status not in terminal_statuses:
+                    self.service.mark_failed(
+                        row,
+                        code="RUN_EXECUTION_ERROR",
+                        message="任务执行失败，请稍后重试",
+                    )
+                    self.service.append_event(
+                        row,
+                        event_type=AgentEventType.FAILED,
+                        stage=AgentRunStage.FAILED,
+                        label="任务执行失败，请稍后重试",
+                        progress=int(row.progress or 0),
+                        event_key=f"runtime-error-{row.attempt}",
+                    )
+                self.db.flush()
+            except Exception:
+                # A broken transaction cannot be repaired in the same unit of
+                # work. Roll back and let the outer request handle the failure.
+                self.db.rollback()
+            self._log_unhandled_failure(row.uuid, exc)
+            return self._snapshot(row)
         finally:
             heartbeat.stop()
             self.service.release_lease(row.uuid, self.worker_id, fencing_token)
             self.service.unbind_lease()
+
+    @staticmethod
+    def _log_unhandled_failure(run_id: str, error: Exception) -> None:
+        # Keep exception messages out of logs because model/tool errors may
+        # contain user-provided or otherwise sensitive content.
+        import logging
+
+        logging.getLogger(__name__).error(
+            "native runtime failed run %s (%s)",
+            run_id,
+            type(error).__name__,
+        )
 
     _SAFE_STEP = frozenset({"succeeded", "completed", "ok"})
 
@@ -669,7 +710,7 @@ class NativeRuntime:
             run_id=row.uuid,
             status=row.status,
             stage=row.stage,
-            progress=int(row.progress or 0),
+            progress=self.service.public_progress(row),
             model_calls=int(row.model_calls or 0),
             result=row.result_json or {},
             error_code=row.error_code or "",

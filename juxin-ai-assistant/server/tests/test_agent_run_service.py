@@ -9,6 +9,7 @@ from app.chat_service import _latest_task_state_payload
 from app.crypto import ContentCipher
 from app.faq_matcher import normalize_question
 from app.models import AgentRun, SharedFaq
+from app.professional_delivery.run_store import ProfessionalRunStore
 
 
 def _cipher() -> ContentCipher:
@@ -150,6 +151,66 @@ def test_public_run_normalizes_artifact_delivery_metadata(generation_db) -> None
     assert payload.artifact.downloadable is True
     assert payload.artifact.editable is True
     assert payload.next_action == "可查看或下载任务成果"
+
+
+def test_successful_run_always_uses_full_progress(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(owner_user_id="user-a", input_text="完成但进度过时")
+    service.mark_running(row)
+    service.mark_succeeded(row, result={"ok": True}, progress=75)
+
+    assert row.progress == 100
+
+    generation_db.commit()
+    row.progress = 75
+    generation_db.commit()
+
+    payload = service.to_public_run(row)
+
+    assert payload.status.value == "succeeded"
+    assert payload.progress == 100
+
+
+def test_not_started_run_does_not_expose_stale_checkpoint_progress(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(owner_user_id="user-a", input_text="尚未开始但进度过时")
+    row.progress = 75
+    generation_db.commit()
+
+    payload = service.to_public_run(row)
+
+    assert payload.status is AgentRunStatus.CREATED
+    assert payload.progress == 0
+
+
+def test_professional_success_always_uses_full_progress(generation_db) -> None:
+    service = ProfessionalRunStore(generation_db, _cipher(), key_version="test")
+    row = service.create_run(owner_user_id="user-a", input_text="专业成果完成但进度过时")
+    service.mark_running(row)
+    service.mark_succeeded(row, result={"ok": True}, progress=75)
+
+    assert row.progress == 100
+
+    generation_db.commit()
+    row.progress = 75
+    generation_db.commit()
+
+    payload = service.public_run(row)
+
+    assert payload["status"] == "succeeded"
+    assert payload["progress"] == 100
+
+
+def test_professional_not_started_run_does_not_expose_stale_checkpoint_progress(generation_db) -> None:
+    service = ProfessionalRunStore(generation_db, _cipher(), key_version="test")
+    row = service.create_run(owner_user_id="user-a", input_text="专业任务尚未开始但进度过时")
+    row.progress = 75
+    generation_db.commit()
+
+    payload = service.public_run(row)
+
+    assert payload["status"] == "queued"
+    assert payload["progress"] == 0
 
 
 def test_latest_chat_task_payload_restores_run_without_task_state(generation_db) -> None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 
+from app.agent_contracts import AgentRunStage
 from app.agent_run_service import AgentRunService
 from app.agent_runtime.native_runtime import NativeRuntime
 from app.agent_runtime.protocol import ResumeCommand, RunRequest
@@ -119,6 +120,46 @@ def test_retry_then_runtime_resume_api_path(generation_db) -> None:
     generation_db.refresh(row)
     assert row.attempt >= 2
     assert snap.run_id == row.uuid
+
+
+def test_runtime_converts_unhandled_checkpoint_failure_to_failed_run(generation_db) -> None:
+    cipher = _cipher()
+    service = AgentRunService(generation_db, cipher)
+    row = service.create_run(
+        owner_user_id="dev",
+        input_text="执行到草稿检查点后失败",
+        run_type="complex",
+        title="checkpoint-failure",
+    )
+    runtime = NativeRuntime(generation_db, cipher)
+
+    def failing_executor(run, _request, _worker_id, _fencing_token):
+        runtime.service.mark_running(run, stage=AgentRunStage.EXECUTING)
+        runtime.service.persist_safe_checkpoint(
+            run,
+            checkpoint={"last_safe_step": "write"},
+            stage=AgentRunStage.EXECUTING,
+            progress=75,
+        )
+        raise RuntimeError("simulated executor failure")
+
+    snapshot = runtime.start_sync_with_executor(
+        RunRequest(
+            run_id=row.uuid,
+            owner_user_id="dev",
+            input_text="执行到草稿检查点后失败",
+            run_type="complex",
+        ),
+        failing_executor,
+    )
+    generation_db.commit()
+    generation_db.refresh(row)
+
+    assert snapshot.status == "failed"
+    assert row.status == "failed"
+    assert row.stage == "failed"
+    assert row.progress == 75
+    assert snapshot.run_id == row.uuid
 
 
 def test_runtime_does_not_execute_when_another_worker_holds_run_lease(generation_db) -> None:

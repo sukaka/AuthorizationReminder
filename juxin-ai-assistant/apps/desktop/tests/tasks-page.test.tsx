@@ -69,6 +69,48 @@ it('opens a deep-linked task without exposing internal routing ids', async () =>
   expect(screen.getAllByText('客户汇报 PPT')).toHaveLength(2);
 });
 
+it('renders completed tasks as 100% when the stored progress is stale', async () => {
+  server.use(
+    http.get('/api/ai/runs', () => HttpResponse.json({
+      items: [{
+        run_id: 'run-stale-progress',
+        title: '历史完成任务',
+        status: 'succeeded',
+        stage: 'completed',
+        progress: 75,
+      }],
+      total: 1,
+    })),
+  );
+
+  render(<TasksPage />);
+
+  expect(await screen.findByText('历史完成任务')).toBeInTheDocument();
+  expect(screen.getByText('100%')).toBeInTheDocument();
+  expect(screen.queryByText('75%')).not.toBeInTheDocument();
+});
+
+it('renders not-started tasks as 0% when the stored progress is stale', async () => {
+  server.use(
+    http.get('/api/ai/runs', () => HttpResponse.json({
+      items: [{
+        run_id: 'run-created-stale-progress',
+        title: '尚未开始的任务',
+        status: 'created',
+        stage: 'accepted',
+        progress: 75,
+      }],
+      total: 1,
+    })),
+  );
+
+  render(<TasksPage />);
+
+  expect(await screen.findByText('尚未开始的任务')).toBeInTheDocument();
+  expect(screen.getByText('0%')).toBeInTheDocument();
+  expect(screen.queryByText('75%')).not.toBeInTheDocument();
+});
+
 it('shows a safe failure reason and retries a recoverable task', async () => {
   const retryRequest = vi.fn();
   server.use(

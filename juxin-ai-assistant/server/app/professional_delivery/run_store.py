@@ -263,7 +263,10 @@ class ProfessionalRunStore:
     ) -> None:
         self.transition_status(row, AgentRunStatus.SUCCEEDED)
         row.stage = AgentRunStage.COMPLETED.value
-        row.progress = max(0, min(100, int(progress)))
+        # A terminal success must never expose a stale checkpoint percentage.
+        # Keep the argument for callers that still pass it, but normalize the
+        # persisted value and completion event to the terminal value.
+        row.progress = 100
         row.result_json = dict(result)
         row.finished_at = _utc_now()
         self.append_event(
@@ -271,7 +274,7 @@ class ProfessionalRunStore:
             event_type="completed",
             stage=AgentRunStage.COMPLETED,
             label="专业成果已生成",
-            progress=row.progress,
+            progress=100,
             artifact={
                 "artifact_id": str(result.get("created_version_uuid") or "")
             },
@@ -329,6 +332,31 @@ class ProfessionalRunStore:
             )
 
     @staticmethod
+    def public_progress(row: AgentRun) -> int:
+        """Return a bounded progress value suitable for task payloads."""
+
+        status = _enum_value(row.status)
+        stage = _enum_value(row.stage)
+        if status in {
+            AgentRunStatus.SUCCEEDED.value,
+            AgentRunStatus.COMPLETED.value,
+        } or stage == AgentRunStage.COMPLETED.value:
+            return 100
+        if status in {
+            AgentRunStatus.CREATED.value,
+            AgentRunStatus.QUEUED.value,
+            AgentRunStatus.RETRYING.value,
+        }:
+            # Do not expose the historical 75% draft checkpoint before work
+            # has actually started.
+            return 0
+        try:
+            progress = int(row.progress or 0)
+        except (TypeError, ValueError):
+            progress = 0
+        return max(0, min(100, progress))
+
+    @staticmethod
     def public_run(row: AgentRun) -> dict[str, Any]:
         return {
             "run_id": row.uuid,
@@ -336,7 +364,7 @@ class ProfessionalRunStore:
             "run_type": str(row.run_type or "professional_delivery")[:48],
             "status": str(row.status or "queued"),
             "stage": str(row.stage or "accepted"),
-            "progress": max(0, min(100, int(row.progress or 0))),
+            "progress": ProfessionalRunStore.public_progress(row),
             "artifact": None,
             "citations": [],
             "created_at": row.created_at,

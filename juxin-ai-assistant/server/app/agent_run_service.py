@@ -51,6 +51,10 @@ def _safe_positive_int(value: Any, default: int = 1) -> int:
         return default
 
 
+def _enum_value(value: Any) -> str:
+    return str(getattr(value, "value", value) or "")
+
+
 def _normalized_artifact(
     raw: Any,
     *,
@@ -449,7 +453,9 @@ class AgentRunService:
     ) -> None:
         self.transition_status(row, AgentRunStatus.SUCCEEDED)
         row.stage = AgentRunStage.COMPLETED.value
-        row.progress = progress
+        # A successful run is terminal; a stale caller checkpoint must not
+        # leak into the task center as an incomplete percentage.
+        row.progress = 100
         row.result_json = result
         row.finished_at = _utc_now()
         self.db.add(row)
@@ -825,6 +831,30 @@ class AgentRunService:
             "role": cp.role,
         }
 
+    @staticmethod
+    def public_progress(row: AgentRun) -> int:
+        """Return a bounded progress value suitable for public task payloads."""
+
+        if _enum_value(row.status) in {
+            AgentRunStatus.SUCCEEDED.value,
+            AgentRunStatus.COMPLETED.value,
+        } or _enum_value(row.stage) == AgentRunStage.COMPLETED.value:
+            return 100
+        if _enum_value(row.status) in {
+            AgentRunStatus.CREATED.value,
+            AgentRunStatus.QUEUED.value,
+            AgentRunStatus.RETRYING.value,
+        }:
+            # These lifecycle states have not started meaningful execution.
+            # Older rows may still contain the 75% draft checkpoint; it must
+            # not be presented as current task progress.
+            return 0
+        try:
+            progress = int(row.progress or 0)
+        except (TypeError, ValueError):
+            progress = 0
+        return max(0, min(100, progress))
+
     def to_public_run(self, row: AgentRun) -> AgentRunContract:
         status = row.status
         # Map completed synonym if stored as succeeded
@@ -888,7 +918,7 @@ class AgentRunService:
             run_type=str(row.run_type or "chat")[:48],
             status=status_enum,
             stage=stage_enum,
-            progress=int(row.progress or 0),
+            progress=self.public_progress(row),
             attempt=_safe_positive_int(row.attempt),
             requires_user_action=requires_user_action,
             next_action=_next_action_for_status(status_enum.value, row.checkpoint_json),

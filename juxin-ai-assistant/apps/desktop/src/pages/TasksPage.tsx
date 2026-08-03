@@ -48,6 +48,16 @@ function stageLabel(stage?: string | null): string {
   return STAGE_LABEL[stage] || '处理中';
 }
 
+function displayProgress(run: Pick<AgentRunPayload, 'status' | 'stage' | 'progress'>): number {
+  if (run.status === 'succeeded' || run.status === 'completed' || run.stage === 'completed') {
+    return 100;
+  }
+  if (run.status === 'created' || run.status === 'queued' || run.status === 'retrying') {
+    return 0;
+  }
+  return Math.max(0, Math.min(100, run.progress ?? 0));
+}
+
 type TasksPageProps = {
   initialRunId?: string;
   onOpenArtifact?: (artifactId: string) => void;
@@ -275,7 +285,7 @@ export function TasksPage({
               </span>
               <span>
                 <small>{item.updated_at ? new Date(item.updated_at).toLocaleString() : ''}</small>
-                <em>{item.progress ?? 0}%</em>
+                <em>{displayProgress(item)}%</em>
               </span>
             </button>
           ))}
@@ -304,10 +314,10 @@ export function TasksPage({
                   <span className="eyebrow">{STATUS_LABEL[detail.run.status] || detail.run.status}</span>
                   <h2>{detail.run.title || '任务详情'}</h2>
                 </div>
-                <span>{detail.run.progress ?? 0}%</span>
+                <span>{displayProgress(detail.run)}%</span>
               </header>
               <p style={{ fontSize: 13, opacity: 0.8 }}>
-                阶段：{stageLabel(detail.run.stage)} · 进度：{detail.run.progress ?? 0}%
+                阶段：{stageLabel(detail.run.stage)} · 进度：{displayProgress(detail.run)}%
               </p>
               {detail.run.next_action ? (
                 <p className="form-success" role="status">
