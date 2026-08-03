@@ -37,7 +37,12 @@ _CONTENT_LAYOUTS = (
     "theme01_page030",
     "theme01_page006",
 )
-_THEME_PATTERN = re.compile(r"\btheme\s*(0?[1-9]|1[0-2])\b", re.IGNORECASE)
+# Keep Chinese text adjacent to a theme token valid while avoiding matches inside
+# longer ASCII identifiers such as `theme040`.
+_THEME_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9_])theme\s*(0?[1-9]|1[0-2])(?![A-Za-z0-9_])",
+    re.IGNORECASE,
+)
 _CONFIRMATION_PREFIX = "# 大师 PPT 制作前确认"
 _DASHI_THEME_PREVIEW_URL = "/api/skills/dashi-ppt/theme-preview"
 _AUTO_THEME_MARKERS = ("你来定", "你决定", "你定", "你帮我定", "默认风格", "随便选")

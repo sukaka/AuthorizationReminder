@@ -63,6 +63,14 @@ def test_chat_ppt_confirmation_requires_style_and_media_choice() -> None:
     assert selected.needs_media is True
     assert selected.is_complete
 
+    adjacent_selected = _parse_ppt_selection(
+        "主题ccmp介绍 风格theme04 不需要图片",
+        fallback_question="做个 PPT",
+    )
+    assert adjacent_selected.theme_pack == "theme04"
+    assert adjacent_selected.needs_media is False
+    assert adjacent_selected.is_complete
+
     auto_selected = _parse_ppt_selection(
         "你来定；不需要图片",
         fallback_question="制作年度经营汇报 PPT",
