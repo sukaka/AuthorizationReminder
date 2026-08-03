@@ -1,8 +1,10 @@
 import json
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
+import pytest
 from sqlalchemy import select
 
 
@@ -118,9 +120,87 @@ def test_chat_answer_becomes_complete_dashi_goal_spec() -> None:
     layouts = [slide["layout"] for slide in spec["slides"]]
     assert len(layouts) == len(set(layouts))
     assert isinstance(spec["slides"][0]["props"]["meta"], list)
-    assert spec["slides"][0]["props"]["chipCount"] == 3
-    assert spec["slides"][0]["props"]["metaCount"] == 3
+    assert spec["slides"][0]["props"]["chipCount"] == 0
+    assert spec["slides"][0]["props"]["metaCount"] == 0
     assert isinstance(spec["slides"][-1]["props"]["meta"], list)
+
+
+def test_chat_goal_rejects_unstructured_model_output_instead_of_inventing_deck() -> None:
+    from app.chat_ppt_workflow import DashiPptContentError, build_dashi_goal_spec
+
+    with pytest.raises(DashiPptContentError, match="有效页面"):
+        build_dashi_goal_spec(
+            "我建议从目标、判断和行动三个方面展开。",
+            question="制作一份研发效能提升 PPT",
+        )
+
+
+def test_chat_goal_keeps_only_model_supplied_content_without_generic_business_copy() -> None:
+    from app.chat_ppt_workflow import build_dashi_goal_spec
+
+    spec = build_dashi_goal_spec(
+        """# 海洋塑料污染科普
+
+        面向中学生解释塑料从海岸进入海洋的过程及应对方式。
+
+        ## 污染如何进入海洋
+        - 雨水会把街道垃圾带入河流
+        - 河流最终将塑料碎片带到近海
+
+        ## 对生物的影响
+        - 海鸟可能误食漂浮塑料
+        - 微塑料会进入食物链
+        """,
+        question="制作海洋塑料污染科普 PPT",
+    )
+
+    encoded = json.dumps(spec, ensure_ascii=False)
+    assert "雨水会把街道垃圾带入河流" in encoded
+    assert "微塑料会进入食物链" in encoded
+    for forbidden in ("行动闭环", "执行抓手", "责任人与执行节奏", "业务场景"):
+        assert forbidden not in encoded
+
+
+def test_ppt_model_request_uses_full_generation_budget() -> None:
+    from app.chat_routes import _route_model_config
+    from app.server_model_client import ModelRequestConfig
+
+    config = ModelRequestConfig(
+        base_url="https://example.invalid/v1",
+        api_key="test-key",
+        model_id="deepseek-chat",
+        display_name="DeepSeek",
+        timeout_seconds=60,
+        max_output_tokens=8192,
+        disable_thinking=True,
+    )
+    routed = _route_model_config(
+        config,
+        [
+            SimpleNamespace(role="system", content="你正在执行 Dashi PPT（大师 PPT）演示文稿任务。"),
+            SimpleNamespace(role="user", content="做一份产品介绍 PPT"),
+        ],
+    )
+
+    assert routed.max_output_tokens == 4096
+    assert routed.disable_thinking is False
+
+
+def test_theme_scaffold_labels_only_reuse_deck_content() -> None:
+    from app.dashi_ppt_runtime import _ScaffoldCopyCursor
+
+    cursor = _ScaffoldCopyCursor(
+        index=2,
+        title="海洋塑料污染科普",
+        lead="解释塑料如何进入海洋",
+        heading="对生物的影响",
+        points=["海鸟可能误食漂浮塑料"],
+    )
+
+    labels = [cursor.next(role="label") for _ in range(4)]
+
+    assert labels == ["海洋塑料污染科普", "对生物的影响", "第 02 页", "海洋塑料污染科普"]
+    assert not {"聚信 AI 助手", "经营复盘", "行动计划"}.intersection(labels)
 
 
 def test_chat_goal_uses_selected_theme_scaffold(monkeypatch) -> None:

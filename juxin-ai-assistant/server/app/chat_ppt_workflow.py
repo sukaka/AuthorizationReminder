@@ -60,6 +60,10 @@ _THEME_LABELS = {
 }
 
 
+class DashiPptContentError(ValueError):
+    """The model reply cannot safely be turned into a user-requested deck."""
+
+
 @dataclass(frozen=True)
 class ChatPptContext:
     intent: PptIntent
@@ -198,15 +202,15 @@ def build_chat_ppt_system_message(context: ChatPptContext) -> str:
         "你正在执行 Dashi PPT（大师 PPT）演示文稿任务。服务器会在你的回答完成后，"
         "调用 Dashi PPT 运行时及 html-deck-to-pptx 导出引擎生成可编辑 HTML 和真实 PPTX 文件。"
         "不得回答‘不能生成 PPTX’、‘只能提供大纲’或要求用户手动选择 Skill。\n"
-        "请直接给出完整演示稿，严格使用以下 Markdown 结构：\n"
-        "# 演示标题\n一句简短导语\n## 第 1 页标题\n- 要点一\n- 要点二\n"
-        "## 第 2 页标题\n- 要点一\n- 要点二\n"
-        "正文建议 5 至 10 页；每页 2 至 5 个简洁、可直接展示的要点。"
-        "演示标题不超过 36 个字，导语不超过 54 个字，页标题不超过 28 个字，每个要点不超过 36 个字，避免布局溢出。"
-        "不要输出代码围栏，不要只输出制作建议。\n"
+        "请先理解原始需求中的主题、受众、用途、必须覆盖项和禁止偏离项，再直接输出完整演示稿。"
+        "你的回答必须是一个 JSON 对象，禁止代码围栏、解释或额外文本，格式如下：\n"
+        '{"title":"演示标题","summary":"一句导语","slides":[{"title":"第 1 页标题","points":["要点一","要点二","要点三"]}]}'
+        "\nslides 建议 5 至 10 页；每页 2 至 5 个简洁、可直接展示的要点。"
+        "不得添加原始需求未支持的业务事实、数据、行动方案或通用管理话术；信息不足时使用中性表述，不要编造。"
+        "演示标题不超过 36 个字，导语不超过 54 个字，页标题不超过 28 个字，每个要点不超过 36 个字，避免布局溢出。\n"
         f"已确认视觉风格：{context.theme_pack}（{_THEME_LABELS.get(context.theme_pack, '自定义主题')}）。\n"
         f"素材需求：{'需要图片或视频素材，请在适合的页面预留素材位并描述素材建议。' if context.needs_media else '不需要额外图片或视频素材，请以文字、图表和版式组织内容。'}\n"
-        f"本次演示的原始需求：{_clean_text(context.source_question, limit=160)}。"
+        f"本次演示的原始需求：{_clean_text(context.source_question, limit=1200)}。"
         f"{revision_context}"
     )
 
@@ -235,19 +239,15 @@ def build_dashi_goal_spec(
     slides: list[dict] = [{
         "layout": "theme01_page001",
         "props": {
-            "kicker": "聚信 AI 助手 · 大师 PPT",
+            "kicker": _clean_text(title, limit=36),
             "titleTop": title_top,
             "titleBottom": title_bottom,
-            "en": "JUXIN AI PRESENTATION",
+            "en": _clean_text(title, limit=36),
             "lead": lead,
-            "chips": ["自动生成", "可继续调整", "PPTX 交付"],
-            "chipCount": 3,
-            "meta": [
-                {"label": "生成方式", "value": "聚信 AI 助手"},
-                {"label": "编辑能力", "value": "HTML 可调整"},
-                {"label": "交付格式", "value": "PPTX"},
-            ],
-            "metaCount": 3,
+            "chips": [],
+            "chipCount": 0,
+            "meta": [],
+            "metaCount": 0,
         },
     }]
     for index, (heading, points) in enumerate(sections[:len(_CONTENT_LAYOUTS)], start=1):
@@ -260,24 +260,20 @@ def build_dashi_goal_spec(
     slides.append({
         "layout": "theme01_page084",
         "props": {
-            "kicker": "总结",
-            "title": "结论与下一步",
-            "en": "CONCLUSION & NEXT STEPS",
+            "kicker": _clean_text(sections[-1][0] if sections else title, limit=28),
+            "title": _clean_text(sections[-1][0] if sections else title, limit=32),
+            "en": _clean_text(sections[-1][0] if sections else title, limit=32),
             "cn": _clean_text(final_point, limit=54),
-            "listLabel": "交付说明 · DELIVERY",
+            "listLabel": _clean_text(sections[-1][0] if sections else title, limit=28),
             "sources": [],
-            "panelLabel": "版本与调整 · REVISION",
-            "lead": "以上内容可在当前聊天中继续提出修改要求，系统会保留旧版并生成新版本。",
-            "meta": [
-                {"k": "演示主题", "v": _clean_text(title, limit=32)},
-                {"k": "可编辑版本", "v": "HTML"},
-                {"k": "正式交付", "v": "PPTX"},
-            ],
-            "disclaimer": "内容由 AI 辅助生成，正式使用前请结合实际数据复核。",
-            "caption": "聚信 AI 助手 · 支持在聊天中继续修改",
+            "panelLabel": "",
+            "lead": _clean_text(final_point, limit=54),
+            "meta": [],
+            "disclaimer": "",
+            "caption": _clean_text(title, limit=36),
             "sourceCount": 0,
-            "showPanel": True,
-            "showDisclaimer": True,
+            "showPanel": False,
+            "showDisclaimer": False,
         },
     })
     return {"title": title, "themePack": "theme01", "slides": slides}
@@ -291,42 +287,46 @@ def _content_slide_props(
     points: list[str],
 ) -> dict:
     content = _slide_points(heading, points)
+
+    def point_at(position: int) -> str:
+        return content[position] if position < len(content) else ""
+
     common = {
-        "kicker": f"{index:02d} / 核心内容",
+        "kicker": _clean_text(heading, limit=28),
         "title": _clean_text(heading, limit=32),
-        "en": f"SECTION {index:02d}",
+        "en": _clean_text(heading, limit=32),
     }
     if layout == "theme01_page010":
         return {
             **common,
-            "cn": content[0],
+            "cn": point_at(0),
             "axisA": {
-                "tag": "核心判断",
-                "title": content[1],
-                "en": "KEY INSIGHT",
-                "desc": content[2],
+                "tag": "要点一",
+                "title": point_at(1),
+                "en": "POINT 01",
+                "desc": point_at(2),
             },
             "axisB": {
-                "tag": "行动建议",
-                "title": content[3],
-                "en": "NEXT ACTION",
-                "desc": content[4],
+                "tag": "要点二",
+                "title": point_at(3),
+                "en": "POINT 02",
+                "desc": point_at(4),
             },
-            "result": f"形成第 {index} 页行动闭环",
-            "crossLabel": "判断 × 行动",
-            "caption": f"第 {index} 页聚焦关键判断与执行路径",
+            "result": point_at(4),
+            "crossLabel": _clean_text(heading, limit=18),
+            "caption": _clean_text(heading, limit=36),
         }
     if layout in {"theme01_page011", "theme01_page013"}:
         return {
-            "kicker": "章节要点",
+            "kicker": _clean_text(heading, limit=28),
             "partLabel": f"PART {index:02d}",
             "index": f"{index:02d}",
             "title": common["title"],
             "en": common["en"],
-            "desc": content[0],
+            "desc": point_at(0),
             "topics": [{"label": item} for item in content[1:]],
-            "caption": f"第 {index} 章 · 重点内容导航",
-            "topicCount": 4,
+            "caption": _clean_text(heading, limit=36),
+            "topicCount": max(0, len(content) - 1),
             "imageSlotCount": 0,
             "images": [],
         }
@@ -350,58 +350,58 @@ def _content_slide_props(
             "cn": content[0],
             "layers": [
                 {
-                    "name": "目标层",
-                    "en": "GOAL",
-                    "segments": [segment("核心判断"), segment("成果标准")],
+                    "name": "模块一",
+                    "en": "PART 01",
+                    "segments": [segment("要点一"), segment("要点二")],
                 },
                 {
-                    "name": "执行层",
-                    "en": "ACTION",
-                    "segments": [segment("责任分工"), segment("实施节奏")],
+                    "name": "模块二",
+                    "en": "PART 02",
+                    "segments": [segment("要点三"), segment("要点四")],
                 },
                 {
-                    "name": "验证层",
-                    "en": "VERIFY",
-                    "segments": [segment("过程检查"), segment("风险响应"), segment("复盘沉淀")],
+                    "name": "模块三",
+                    "en": "PART 03",
+                    "segments": [segment("补充一"), segment("补充二"), segment("补充三")],
                 },
             ],
-            "caption": f"第 {index} 页 · 从目标到验证形成完整链路",
+            "caption": _clean_text(heading, limit=36),
             "groupCount": 3,
             "itemsPerGroup": 4,
         }
     if layout == "theme01_page015":
         return {
             **common,
-            "lead": content[0],
-            "highlightWord": "执行重点",
-            "bigStat": {"value": "01", "unit": "项", "label": content[1]},
+            "lead": point_at(0),
+            "highlightWord": "重点内容",
+            "bigStat": {"value": "01", "unit": "", "label": point_at(1)},
             "stats": [
-                {"value": "02", "unit": "项", "label": content[2]},
-                {"value": "03", "unit": "项", "label": content[3]},
-                {"value": "04", "unit": "项", "label": content[4]},
+                {"value": "02", "unit": "", "label": point_at(2)},
+                {"value": "03", "unit": "", "label": point_at(3)},
+                {"value": "04", "unit": "", "label": point_at(4)},
             ],
             "images": [],
-            "caption": f"第 {index} 页 · 四项执行抓手",
+            "caption": _clean_text(heading, limit=36),
             "imageSlotCount": 0,
             "statCount": 3,
         }
     if layout == "theme01_page009":
         return {
-            "kicker": "# 报告导览",
-            "title": f"第 {index} 部分 · 内容导览",
-            "en": f"SECTION {index:02d} CONTENTS",
-            "cn": content[0],
+            "kicker": _clean_text(heading, limit=28),
+            "title": _clean_text(heading, limit=32),
+            "en": _clean_text(heading, limit=32),
+            "cn": point_at(0),
             "chapters": [
                 {
                     "no": f"{item_index:02d}",
                     "label": _clean_text(item, limit=18),
-                    "en": f"FOCUS {item_index:02d}",
-                    "desc": f"第 {item_index} 项重点及其落地要求",
+                    "en": f"POINT {item_index:02d}",
+                    "desc": "",
                 }
                 for item_index, item in enumerate(content, start=1)
             ],
-            "caption": f"第 {index} 页 · 五项重点一览",
-            "chapterCount": 5,
+            "caption": _clean_text(heading, limit=36),
+            "chapterCount": len(content),
             "highlight": True,
             "highlightIndex": 0,
             "showDesc": True,
@@ -410,47 +410,39 @@ def _content_slide_props(
     if layout == "theme01_page030":
         return {
             **common,
-            "cn": content[0],
-            "lead": content[1],
-            "highlightWord": "落地执行",
+            "cn": point_at(0),
+            "lead": point_at(1),
+            "highlightWord": "重点内容",
             "stats": [
-                {"value": "01", "unit": "项", "label": content[2]},
-                {"value": "02", "unit": "项", "label": content[3]},
-                {"value": "03", "unit": "项", "label": content[4]},
+                {"value": "01", "unit": "", "label": point_at(2)},
+                {"value": "02", "unit": "", "label": point_at(3)},
+                {"value": "03", "unit": "", "label": point_at(4)},
             ],
             "images": [],
-            "caption": f"第 {index} 页 · 从判断走向实施",
+            "caption": _clean_text(heading, limit=36),
             "imageSlotCount": 0,
             "statCount": 3,
         }
     return {
-        "kicker": f"第 {index} 页 · 关键结论",
+        "kicker": _clean_text(heading, limit=28),
         "value": f"{index:02d}",
-        "unit": "项主题",
-        "sub": content[0],
-        "highlightWord": "关键结论",
+        "unit": "",
+        "sub": point_at(0),
+        "highlightWord": "重点内容",
         "secondaries": [
-            {"value": "01", "unit": "项", "label": content[1]},
-            {"value": "02", "unit": "项", "label": content[2]},
-            {"value": "03", "unit": "项", "label": content[3]},
+            {"value": "01", "unit": "", "label": point_at(1)},
+            {"value": "02", "unit": "", "label": point_at(2)},
+            {"value": "03", "unit": "", "label": point_at(3)},
         ],
-        "caption": content[4],
+        "caption": point_at(4) or _clean_text(heading, limit=36),
         "secondaryCount": 3,
     }
 
 
 def _slide_points(heading: str, points: list[str]) -> list[str]:
-    candidates = [
-        *points,
-        f"明确本页主题的核心目标与预期结果",
-        f"围绕业务场景识别关键判断依据",
-        f"将重点任务落实到责任人与执行节奏",
-        f"通过阶段成果持续验证实施效果",
-        f"沉淀可复用的方法并形成后续闭环",
-    ]
     result: list[str] = []
     seen = {_clean_text(heading, limit=36)}
-    for candidate in candidates:
+    for candidate in points:
         cleaned = _clean_text(candidate, limit=36)
         if not cleaned or cleaned in seen:
             continue
@@ -476,6 +468,16 @@ def run_chat_dashi_ppt(
         skill = get_default_skill_registry().get("dashi-ppt")
     except KeyError as exc:
         raise HTTPException(status_code=503, detail="DASHI_PPT_SKILL_UNAVAILABLE") from exc
+    try:
+        goal_spec = build_dashi_goal_spec(
+            answer,
+            question=question,
+            theme_pack=theme_pack,
+            needs_media=needs_media,
+            settings=settings,
+        )
+    except DashiPptContentError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     result = SkillRunner(db=db, settings=settings).run(
         skill=skill,
         session=session_payload,
@@ -483,13 +485,7 @@ def run_chat_dashi_ppt(
         user_input={
             "question": question,
             "formats": ["html", "pptx"],
-            "goal_spec": build_dashi_goal_spec(
-                answer,
-                question=question,
-                theme_pack=theme_pack,
-                needs_media=needs_media,
-                settings=settings,
-            ),
+            "goal_spec": goal_spec,
         },
     )
     run_id = str(result["run_id"])
@@ -585,6 +581,9 @@ def _normalized(value: object) -> str:
 
 
 def _parse_deck_markdown(answer: str, *, question: str) -> tuple[str, str, list[tuple[str, list[str]]]]:
+    structured = _parse_deck_json(answer)
+    if structured is not None:
+        return structured
     lines = [line.strip() for line in str(answer).splitlines()]
     title = ""
     lead_parts: list[str] = []
@@ -612,16 +611,61 @@ def _parse_deck_markdown(answer: str, *, question: str) -> tuple[str, str, list[
             lead_parts.append(cleaned)
     if current_heading:
         sections.append((current_heading, current_points))
-    title = title or _clean_text(question, limit=36) or "专题汇报"
-    lead = _clean_text(" ".join(lead_parts), limit=54) or "围绕目标、关键判断与下一步行动形成完整汇报。"
-    if not sections:
-        fallback_points = [
-            _clean_text(item, limit=36)
-            for item in re.split(r"[。；\n]+", str(answer))
-            if _clean_text(item, limit=36)
-        ][:5]
-        sections = [("核心内容", fallback_points or [lead])]
-    return title, lead, sections
+    title = title or _clean_text(question, limit=36)
+    lead = _clean_text(" ".join(lead_parts), limit=54)
+    return _validate_deck_content(title=title, lead=lead, sections=sections)
+
+
+def _parse_deck_json(answer: str) -> tuple[str, str, list[tuple[str, list[str]]]] | None:
+    text = str(answer or "").strip()
+    if text.startswith("```") and text.endswith("```"):
+        text = re.sub(r"^```(?:json)?\\s*|\\s*```$", "", text, flags=re.IGNORECASE).strip()
+    if not text.startswith("{"):
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    raw_slides = payload.get("slides")
+    if not isinstance(raw_slides, list):
+        raise DashiPptContentError("DASHI_PPT_CONTENT_INVALID: 模型未返回有效页面。")
+    sections: list[tuple[str, list[str]]] = []
+    for item in raw_slides:
+        if not isinstance(item, dict):
+            continue
+        heading = _clean_text(item.get("title"), limit=28)
+        raw_points = item.get("points")
+        points = [
+            _clean_text(point, limit=36)
+            for point in raw_points
+            if _clean_text(point, limit=36)
+        ] if isinstance(raw_points, list) else []
+        sections.append((heading, points))
+    return _validate_deck_content(
+        title=_clean_text(payload.get("title"), limit=36),
+        lead=_clean_text(payload.get("summary"), limit=54),
+        sections=sections,
+    )
+
+
+def _validate_deck_content(
+    *,
+    title: str,
+    lead: str,
+    sections: list[tuple[str, list[str]]],
+) -> tuple[str, str, list[tuple[str, list[str]]]]:
+    cleaned_sections: list[tuple[str, list[str]]] = []
+    for heading, points in sections:
+        unique_points = _slide_points(heading, points)
+        if heading and unique_points:
+            cleaned_sections.append((heading, unique_points))
+    if not lead and cleaned_sections:
+        lead = cleaned_sections[0][1][0]
+    if not title or not lead or not cleaned_sections:
+        raise DashiPptContentError("DASHI_PPT_CONTENT_INVALID: 模型未返回有效页面，请重新生成。")
+    return title, lead, cleaned_sections
 
 
 def _clean_text(value: object, *, limit: int) -> str:
@@ -632,9 +676,9 @@ def _clean_text(value: object, *, limit: int) -> str:
 
 def _split_title(title: str) -> tuple[str, str]:
     if len(title) <= 14:
-        return title, "专题汇报"
+        return title, title
     middle = min(max(len(title) // 2, 8), 18)
-    return title[:middle], title[middle:36] or "专题汇报"
+    return title[:middle], title[middle:36] or title[:middle]
 
 
 def _prompt_safe_previous_goal(goal: dict) -> dict:

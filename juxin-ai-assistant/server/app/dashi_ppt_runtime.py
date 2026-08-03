@@ -414,13 +414,8 @@ class _ScaffoldCopyCursor:
             return self.title if self.index == 1 else self.heading
         if normalized_role in {"eyebrow", "kicker", "label"}:
             labels = (
-                "聚信 AI 助手",
-                "经营复盘",
-                "核心议题",
-                "数据洞察",
-                "行动计划",
-                "季度报告",
-                "管理简报",
+                self.title,
+                self.heading,
                 f"第 {self.index:02d} 页",
             )
             value = labels[self.position % len(labels)]

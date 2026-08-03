@@ -60,7 +60,6 @@ from .schemas import (
 from .server_model_client import (
     ModelRequestConfig,
     generate_with_model_config,
-    generate_with_server_model,
     is_server_model_configured,
     stream_with_model_config,
 )
@@ -153,6 +152,16 @@ def _route_model_config(
     config: ModelRequestConfig,
     messages,
 ) -> ModelRequestConfig:
+    is_dashi_ppt = any(
+        message.role == "system" and "Dashi PPT（大师 PPT）" in message.content
+        for message in messages
+    )
+    if is_dashi_ppt:
+        return replace(
+            config,
+            max_output_tokens=min(config.max_output_tokens, 4096),
+            disable_thinking=False,
+        )
     user_text = ""
     for message in reversed(messages):
         if message.role == "user":
@@ -405,27 +414,20 @@ async def chat_message_generate(
         user_id=str(session_payload.user.id),
         current_settings=current_settings,
     )
-    user_model_profile = get_default_user_model_profile(db, str(session_payload.user.id))
-    if user_model_profile is not None:
-        base_url = validate_user_model_endpoint(user_model_profile.base_url, current_settings)
-        result = await generate_with_model_config(
-            ModelRequestConfig(
-                base_url=base_url,
-                api_key=decrypt_user_model_api_key(cipher, user_model_profile),
-                model_id=user_model_profile.model_id,
-                display_name=user_model_profile.display_name,
-                timeout_seconds=user_model_profile.timeout_seconds,
-                max_output_tokens=user_model_profile.max_output_tokens,
-            ),
-            [message.model_dump() for message in body.messages],
-            body.temperature,
-        )
-    else:
-        result = await generate_with_server_model(
+    config = _route_model_config(
+        _chat_model_config_for_user(
+            db,
+            str(session_payload.user.id),
             current_settings,
-            [message.model_dump() for message in body.messages],
-            body.temperature,
-        )
+            cipher,
+        ),
+        body.messages,
+    )
+    result = await generate_with_model_config(
+        config,
+        [message.model_dump() for message in body.messages],
+        body.temperature,
+    )
     complete_body = ChatCompleteIn(
         completion_token=body.completion_token,
         answer=result.output,
