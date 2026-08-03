@@ -1,0 +1,257 @@
+.enterprise-management-page {
+  min-height: calc(100vh - 124px);
+  padding: clamp(4px, 1vw, 12px) 0 24px;
+}
+.enterprise-management-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 10px 0 26px;
+  border-bottom: 1px solid var(--border);
+}
+
+.enterprise-management-header h1 {
+  margin: 8px 0;
+  font-size: clamp(30px, 4vw, 46px);
+  letter-spacing: -.05em;
+  line-height: 1.05;
+}
+
+.enterprise-management-header p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.enterprise-management-org-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 230px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.enterprise-management-org-picker select,
+.enterprise-management-form input,
+.enterprise-management-form select,
+.enterprise-management-form textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  transition: border-color .18s ease, box-shadow .18s ease;
+}
+
+.enterprise-management-org-picker select,
+.enterprise-management-form input,
+.enterprise-management-form select {
+  min-height: 38px;
+  padding: 8px 10px;
+}
+
+.enterprise-management-form textarea {
+  min-height: 72px;
+  padding: 9px 10px;
+  resize: vertical;
+}
+
+.enterprise-management-org-picker select:focus,
+.enterprise-management-form input:focus,
+.enterprise-management-form select:focus,
+.enterprise-management-form textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.enterprise-management-notice {
+  margin: 16px 0;
+  padding: 11px 13px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.enterprise-management-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 16px 0;
+}
+
+.enterprise-management-panel {
+  min-width: 0;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow-pop);
+}
+
+.enterprise-management-panel .enterprise-panel-heading {
+  margin-bottom: 16px;
+}
+
+.enterprise-management-form {
+  display: grid;
+  gap: 11px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.enterprise-management-form label {
+  display: grid;
+  gap: 5px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.enterprise-management-form-grid,
+.enterprise-management-number-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.enterprise-management-number-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.enterprise-management-checkbox {
+  display: flex !important;
+  align-items: center;
+  gap: 8px !important;
+  font-weight: 500 !important;
+}
+
+.enterprise-management-checkbox input {
+  width: auto;
+  min-height: 0;
+  accent-color: var(--accent);
+}
+
+.enterprise-management-form .primary-action {
+  justify-self: start;
+}
+
+.enterprise-management-list,
+.enterprise-management-proposal-list {
+  display: grid;
+  gap: 9px;
+  margin-top: 15px;
+}
+
+.enterprise-management-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface-elevated) 56%, transparent);
+}
+
+.enterprise-management-card > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.enterprise-management-card strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.enterprise-management-card small,
+.enterprise-management-card p {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.enterprise-management-card > p {
+  grid-column: 1 / -1;
+}
+
+.enterprise-management-empty {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: 13px;
+}
+
+.enterprise-management-proposals {
+  margin-bottom: 16px;
+}
+
+.enterprise-management-proposal-form {
+  grid-template-columns: 1fr 1fr;
+  align-items: end;
+}
+
+.enterprise-management-proposal-form > label:nth-of-type(2),
+.enterprise-management-proposal-form > label:nth-of-type(3),
+.enterprise-management-proposal-form > .primary-action {
+  grid-column: 1 / -1;
+}
+
+.enterprise-management-json {
+  min-height: 100px !important;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+}
+
+.enterprise-management-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.enterprise-management-actions button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.enterprise-management-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-text);
+}
+
+.enterprise-management-actions button:disabled,
+.enterprise-management-form button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.enterprise-management-state {
+  min-height: 360px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.enterprise-management-state h2 { margin: 14px 0 0; }
+.enterprise-management-state p { margin: 0; color: var(--text-secondary); }

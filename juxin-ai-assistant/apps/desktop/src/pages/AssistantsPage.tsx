@@ -124,31 +124,18 @@ export function AssistantsPage({ onOpenTask }: AssistantsPageProps) {
       {error ? <p className="form-error" role="alert">{error}</p> : null}
 
       {roleAssistants.length ? (
-        <section aria-label="岗位助手" style={{ marginBottom: 20 }}>
-          <h2 style={{ fontSize: 16, marginBottom: 8 }}>岗位助手</h2>
+        <section aria-label="岗位助手" className="catalog-role-section">
+          <h2 className="catalog-role-heading">岗位助手</h2>
           {roleNotice ? <p className="form-success">{roleNotice}</p> : null}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
-              gap: 10,
-            }}
-          >
+          <div className="catalog-role-grid">
             {roleAssistants.map((role) => (
-              <article
-                key={role.code}
-                style={{
-                  border: '1px solid var(--border, #e5e7eb)',
-                  borderRadius: 10,
-                  padding: 12,
-                }}
-              >
+              <article key={role.code} className="catalog-role-card">
                 <strong>{role.name}</strong>
-                <p style={{ fontSize: 12, opacity: 0.8, margin: '6px 0' }}>{role.description}</p>
-                <small style={{ opacity: 0.7 }}>
+                <p className="catalog-role-description">{role.description}</p>
+                <small className="catalog-role-meta">
                   模板 {role.templates.length} · 模式 {role.modes.join(' / ')}
                 </small>
-                <div style={{ marginTop: 8 }}>
+                <div className="catalog-role-actions">
                   <button
                     type="button"
                     className="secondary-action"

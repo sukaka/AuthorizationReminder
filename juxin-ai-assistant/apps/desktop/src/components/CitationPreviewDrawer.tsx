@@ -173,10 +173,10 @@ export function CitationPreviewDrawer({ citation, open, onClose }: CitationPrevi
               <h3>{state.preview.file_name || displayName(state.citation)}</h3>
               <p>{state.preview.notice}</p>
               {state.citation.is_inference ? (
-                <p style={{ fontSize: 12, opacity: 0.75 }}>该片段含推断表述，请以原文为准。</p>
+                <p className="chat-source-preview-inference">该片段含推断表述，请以原文为准。</p>
               ) : null}
               {state.citation.excerpt ? (
-                <p style={{ fontSize: 12, opacity: 0.8 }}>摘要：{state.citation.excerpt}</p>
+                <p className="chat-source-preview-excerpt">摘要：{state.citation.excerpt}</p>
               ) : null}
             </div>
             {state.preview.chunks.map((chunk, index) => {
@@ -213,7 +213,7 @@ export function CitationList({
 }) {
   const [active, setActive] = useState<CitationRef | null>(null);
   if (!items.length) {
-    return <p style={{ fontSize: 13, opacity: 0.7 }}>{emptyText}</p>;
+    return <p className="citation-list-empty">{emptyText}</p>;
   }
   return (
     <>
@@ -234,8 +234,7 @@ export function CitationList({
                 {fileUuid ? (
                   <button
                     type="button"
-                    className="secondary-action"
-                    style={{ padding: '2px 8px', marginRight: 6 }}
+                    className="secondary-action citation-list-preview-button"
                     onClick={() => setActive(c)}
                   >
                     预览
@@ -246,7 +245,7 @@ export function CitationList({
               </span>
               {meta ? <small>{meta}</small> : null}
               {c.excerpt ? (
-                <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>{c.excerpt}</div>
+                <div className="citation-list-excerpt">{c.excerpt}</div>
               ) : null}
             </li>
           );

@@ -1,0 +1,124 @@
+.history-page {
+  display: grid;
+  gap: 24px;
+}
+.history-filters {
+  display: flex;
+  gap: 8px;
+}
+
+.history-tabs {
+  display: flex;
+  gap: 8px;
+}
+
+.history-filters select,
+.history-filters input {
+  min-height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.task-create-row {
+  margin-bottom: 16px;
+  display: flex;
+  gap: 8px;
+}
+
+.task-create-row input {
+  min-width: 0;
+  flex: 1;
+}
+
+.history-layout {
+  min-height: 520px;
+  display: grid;
+  grid-template-columns: minmax(260px, .72fr) minmax(420px, 1.28fr);
+  border-top: 1px solid var(--border);
+}
+
+.history-list {
+  padding: 12px 12px 12px 0;
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  border-right: 1px solid var(--border);
+}
+
+.history-list > button {
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.history-list > button:hover,
+.history-list > button.is-current {
+  background: var(--surface);
+}
+
+.history-list button > span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.history-list button > span:last-child {
+  justify-items: end;
+}
+
+.history-list small {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.history-list em {
+  color: var(--accent);
+  font-size: 10px;
+  font-style: normal;
+}
+
+.history-detail {
+  min-width: 0;
+  padding: 24px 0 24px 28px;
+}
+
+.history-detail > header {
+  display: flex;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.history-detail h2 {
+  margin: 5px 0 0;
+}
+
+.history-detail > header > span {
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.history-actions,
+.feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.history-actions--wrap {
+  flex-wrap: wrap;
+}
+
+.artifact-sources-json {
+  font-size: 12px;
+  white-space: pre-wrap;
+}

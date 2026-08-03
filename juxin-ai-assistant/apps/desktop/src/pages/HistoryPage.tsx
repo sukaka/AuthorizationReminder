@@ -210,7 +210,7 @@ export function HistoryPage({
           <p>聊天导出成果与任务 Run 成果（多格式导出）。</p>
         </div>
         <div className="history-filters">
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div className="history-tabs">
             <button
               type="button"
               className={tab === 'work' ? 'is-current' : ''}
@@ -374,7 +374,7 @@ export function HistoryPage({
               {agentDetail.quality ? (
                 <section className="artifact-sources" aria-label="质量信息">
                   <strong>质量门禁</strong>
-                  <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  <pre className="artifact-sources-json">
                     {JSON.stringify(agentDetail.quality, null, 2)}
                   </pre>
                 </section>
@@ -407,7 +407,7 @@ export function HistoryPage({
                 </section>
               ) : null}
               {downloadStatus ? <p className="form-success">{downloadStatus}</p> : null}
-              <div className="history-actions" style={{ flexWrap: 'wrap' }}>
+              <div className="history-actions history-actions--wrap">
                 {AGENT_EXPORT_FORMATS.map(({ fmt, label }) => (
                   <button
                     key={fmt}

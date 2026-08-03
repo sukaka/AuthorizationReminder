@@ -1,4 +1,7 @@
+import { fileURLToPath } from 'node:url';
+
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { defineConfig } from 'vitest/config';
 
 const apiProxyTarget = 'http://127.0.0.1:5193';
@@ -12,7 +15,12 @@ const apiProxyPrefixes = [
 const authProxyPrefixes = ['/portal', '/api/auth'];
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+    },
+  },
   server: {
     port: 18093,
     proxy: {

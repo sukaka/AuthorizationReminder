@@ -1,0 +1,439 @@
+.knowledge-page {
+  margin-top: 18px;
+  padding-bottom: 92px;
+}
+.knowledge-page-hero {
+  padding: 26px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 12% 0%, color-mix(in srgb, var(--accent) 11%, transparent), transparent 34%),
+    linear-gradient(135deg, color-mix(in srgb, var(--accent-soft) 45%, var(--surface-solid)) 0%, var(--surface-solid) 62%, color-mix(in srgb, var(--accent-soft) 60%, var(--surface-solid)) 100%);
+  box-shadow: var(--shadow-lg);
+}
+
+.knowledge-page-hero h1 {
+  margin: 6px 0 8px;
+  font-size: clamp(30px, 4vw, 42px);
+  letter-spacing: -.06em;
+}
+
+.knowledge-page-hero p {
+  max-width: 760px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 15px;
+  line-height: 1.75;
+}
+
+.knowledge-primary-action {
+  min-width: 118px;
+  min-height: 40px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent);
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.knowledge-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  margin-top: 18px;
+  padding: 0;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  box-shadow: none;
+  backdrop-filter: blur(16px);
+}
+
+.knowledge-tabs button {
+  min-height: 36px;
+  padding: 0 0 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.knowledge-tabs button:hover,
+.knowledge-tabs button:focus-visible {
+  outline: 0;
+  color: var(--accent);
+  background: transparent;
+}
+
+.knowledge-tabs button.is-active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  background: transparent;
+  box-shadow: none;
+}
+
+.knowledge-global-status {
+  margin: 14px 0 0;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.knowledge-search-card,
+.knowledge-upload-panel,
+.knowledge-files-panel {
+  margin-top: 22px;
+}
+
+.knowledge-upload-workspace {
+  margin-top: 4px;
+  padding: 26px;
+  display: grid;
+  gap: 20px;
+  border: 1px solid color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 24px;
+  background: linear-gradient(180deg, var(--surface-solid) 0%, color-mix(in srgb, var(--accent-soft) 35%, var(--surface-solid)) 100%);
+  box-shadow: var(--shadow-lg);
+}
+
+.knowledge-upload-step {
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid transparent;
+  border-radius: 15px;
+}
+
+.knowledge-upload-step--file {
+  border-color: color-mix(in srgb, var(--accent) 16%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--accent) 9%, transparent), color-mix(in srgb, var(--accent) 2%, transparent) 72%, transparent);
+}
+
+.knowledge-upload-step--metadata {
+  border-color: rgb(124 58 237 / 18%);
+  background: linear-gradient(90deg, rgb(124 58 237 / 10%), rgb(124 58 237 / 2%) 72%, transparent);
+}
+
+.knowledge-upload-step > div:last-child {
+  display: grid;
+  gap: 3px;
+}
+
+.knowledge-upload-step strong {
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.knowledge-upload-step span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-upload-step-index {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-solid));
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.knowledge-upload-step--metadata .knowledge-upload-step-index {
+  background: rgb(124 58 237 / 13%);
+  color: #7c3aed;
+  box-shadow: inset 0 0 0 1px rgb(124 58 237 / 8%);
+}
+
+.knowledge-upload-step--metadata strong {
+  color: #5b21b6;
+}
+
+.knowledge-upload-dropzone {
+  min-height: 150px;
+  padding: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 7px;
+  border: 1.5px dashed color-mix(in srgb, var(--accent) 32%, transparent);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 50% 0%, color-mix(in srgb, var(--accent) 8%, transparent), transparent 52%),
+    color-mix(in srgb, var(--accent-soft) 40%, var(--surface-solid));
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+}
+
+.knowledge-upload-dropzone:hover,
+.knowledge-upload-dropzone:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 12px 34px color-mix(in srgb, var(--accent) 10%, transparent);
+  transform: translateY(-1px);
+}
+
+.knowledge-upload-dropzone.has-file {
+  min-height: 110px;
+  border-style: solid;
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-solid));
+}
+
+.knowledge-upload-dropzone input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.knowledge-upload-dropzone-icon {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: var(--accent);
+  color: white;
+  font-size: 23px;
+  font-weight: 500;
+  box-shadow: 0 10px 24px color-mix(in srgb, var(--accent) 20%, transparent);
+}
+
+.knowledge-upload-dropzone strong {
+  margin-top: 4px;
+  color: var(--text-primary);
+  font-size: 15px;
+}
+
+.knowledge-upload-dropzone > span:last-child {
+  font-size: 12px;
+}
+
+.knowledge-upload-configuration {
+  margin-top: 4px;
+  padding-top: 20px;
+  display: grid;
+  gap: 20px;
+  border-top: 1px solid rgb(124 58 237 / 14%);
+}
+
+.knowledge-upload-file-summary {
+  padding: 14px 16px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 13px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+}
+
+.knowledge-upload-file-summary.is-duplicate {
+  border-color: rgb(217 119 6 / 34%);
+  background: color-mix(in srgb, #f59e0b 7%, var(--surface));
+}
+
+.knowledge-upload-file-summary.is-duplicate div span {
+  color: #b45309;
+  font-weight: 700;
+}
+
+.knowledge-upload-file-summary > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.knowledge-upload-file-summary strong {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-upload-file-summary div span {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.knowledge-upload-file-summary button {
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.knowledge-upload-file-type {
+  min-width: 46px;
+  height: 38px;
+  padding: 0 8px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-solid));
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.knowledge-upload-panel .knowledge-purpose-options {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  border: 0;
+  background: transparent;
+}
+
+.knowledge-upload-panel .knowledge-purpose-options legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.knowledge-purpose-option {
+  min-height: 82px;
+  padding: 13px;
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  border: 1px solid var(--border);
+  border-radius: 15px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.knowledge-purpose-option:has(input:checked) {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-solid));
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.knowledge-purpose-option.is-disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
+.knowledge-purpose-option > span {
+  display: grid;
+  gap: 4px;
+}
+
+.knowledge-purpose-option strong {
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.knowledge-purpose-option small {
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.knowledge-upload-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.knowledge-upload-fields label {
+  display: grid;
+  gap: 7px;
+}
+
+.knowledge-upload-fields label > span {
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.knowledge-upload-fields select,
+.knowledge-base-picker select {
+  width: 100%;
+  min-height: 42px;
+  padding: 0 38px 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background-color: var(--surface);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.knowledge-upload-fields select:focus,
+.knowledge-base-picker select:focus {
+  outline: 3px solid color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: var(--accent);
+}
+
+.knowledge-upload-fields select:disabled {
+  background: var(--background);
+  color: var(--text-tertiary);
+}
+
+.knowledge-upload-category-path {
+  padding: 11px 13px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-solid));
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.knowledge-upload-category-path strong {
+  color: var(--accent);
+}
+
+.knowledge-upload-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.upload-parsing-spinner {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-right: 7px;
+  vertical-align: -2px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: upload-parsing-spin 0.75s linear infinite;
+}
+
+@keyframes upload-parsing-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .upload-parsing-spinner { animation-duration: 1.5s; }
+}

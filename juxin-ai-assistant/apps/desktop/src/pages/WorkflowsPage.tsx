@@ -154,14 +154,7 @@ function WorkflowCanvasNodes({
   steps: Array<Record<string, unknown>>;
 }) {
   return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'stretch',
-        gap: 0,
-        minWidth: 'max-content',
-      }}
-    >
+    <div className="workflow-canvas-track">
       {steps.map((s, index) => {
         const stype = String(s.type || '');
         const params =
@@ -172,23 +165,16 @@ function WorkflowCanvasNodes({
             ? (params.branches as Array<Record<string, unknown>>)
             : [];
         const isCondition = stype === 'condition';
+        const nodeClassName = `workflow-canvas-node${stype === 'parallel' ? ' is-parallel' : ''}${
+          isCondition ? ' is-condition' : ''
+        }${branches.length ? ' has-branches' : ''}`;
         return (
-          <div key={`wf-node-${String(s.id)}-${index}`} style={{ display: 'flex', alignItems: 'center' }}>
-            <div
-              style={{
-                minWidth: isCondition || branches.length ? 160 : 120,
-                maxWidth: branches.length ? 220 : 170,
-                padding: '10px 12px',
-                borderRadius: 10,
-                background: stype === 'parallel' ? '#eff6ff' : isCondition ? '#fefce8' : '#fff',
-                border: `1px solid ${stype === 'parallel' ? '#93c5fd' : isCondition ? '#fde047' : '#94a3b8'}`,
-                fontSize: 12,
-              }}
-            >
-              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+          <div key={`wf-node-${String(s.id)}-${index}`} className="workflow-canvas-item">
+            <div className={nodeClassName}>
+              <div className="workflow-canvas-node-title">
                 {index + 1}. {STEP_TYPES.find((t) => t.value === stype)?.label || stype}
               </div>
-              <div style={{ opacity: 0.7, wordBreak: 'break-all' }}>
+              <div className="workflow-canvas-node-meta">
                 {String(s.id)}
                 {agentId ? ` · ${agentId}` : ''}
                 {isCondition && params.then_agent
@@ -196,26 +182,11 @@ function WorkflowCanvasNodes({
                   : ''}
               </div>
               {branches.length ? (
-                <div
-                  style={{
-                    marginTop: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                    borderTop: '1px dashed #bfdbfe',
-                    paddingTop: 6,
-                  }}
-                >
+                <div className="workflow-canvas-branches">
                   {branches.map((b, bi) => (
                     <div
                       key={`br-${String(b.id)}-${bi}`}
-                      style={{
-                        fontSize: 11,
-                        background: '#fff',
-                        border: '1px solid #dbeafe',
-                        borderRadius: 6,
-                        padding: '4px 6px',
-                      }}
+                      className="workflow-canvas-branch"
                     >
                       ∥ {String(b.id || `b${bi + 1}`)}
                       {Array.isArray(b.steps)
@@ -226,34 +197,14 @@ function WorkflowCanvasNodes({
                 </div>
               ) : null}
               {isCondition ? (
-                <div style={{ marginTop: 6, fontSize: 11, opacity: 0.75 }}>
+                <div className="workflow-canvas-condition">
                   if {String(params.if || params.contains || '…')} → 分支
                 </div>
               ) : null}
             </div>
             {index < steps.length - 1 ? (
-              <div
-                aria-hidden
-                style={{
-                  width: 28,
-                  height: 2,
-                  background: '#64748b',
-                  position: 'relative',
-                  margin: '0 2px',
-                }}
-              >
-                <span
-                  style={{
-                    position: 'absolute',
-                    right: -1,
-                    top: -3,
-                    width: 0,
-                    height: 0,
-                    borderTop: '4px solid transparent',
-                    borderBottom: '4px solid transparent',
-                    borderLeft: '6px solid #64748b',
-                  }}
-                />
+              <div aria-hidden className="workflow-canvas-connector">
+                <span className="workflow-canvas-arrow" />
               </div>
             ) : null}
           </div>
@@ -282,23 +233,17 @@ function WorkflowValidationPanel({
   return (
     <section
       aria-label="流程检查结果"
-      style={{
-        marginTop: 12,
-        padding: 12,
-        borderRadius: 10,
-        border: `1px solid ${validation.valid ? '#86efac' : '#fca5a5'}`,
-        background: validation.valid ? '#f0fdf4' : '#fff1f2',
-      }}
+      className={`workflow-validation ${validation.valid ? 'is-valid' : 'is-invalid'}`}
     >
       <strong>{validation.valid ? '检查通过' : '检查未通过'}</strong>
       {validation.preview ? (
-        <p style={{ margin: '6px 0', fontSize: 12, opacity: 0.8 }}>
+        <p className="workflow-validation-preview">
           预览：{validation.preview.node_count ?? 0} 个节点 · 最大深度 {validation.preview.max_depth ?? 0}
           {validation.preview.requires_approval ? ' · 含审批门' : ''}
         </p>
       ) : null}
       {validation.errors.length ? (
-        <ul style={{ margin: '6px 0', paddingLeft: 20, color: '#b91c1c', fontSize: 12 }}>
+        <ul className="workflow-validation-list">
           {validation.errors.map((issue, index) => (
             <li key={`workflow-error-${issue.code}-${index}`}>
               {issue.path ? `${issue.path}：` : ''}{issue.message} <code>{issue.code}</code>
@@ -307,7 +252,7 @@ function WorkflowValidationPanel({
         </ul>
       ) : null}
       {validation.warnings.length ? (
-        <ul style={{ margin: '6px 0', paddingLeft: 20, color: '#92400e', fontSize: 12 }}>
+        <ul className="workflow-validation-list is-warning">
           {validation.warnings.map((issue, index) => (
             <li key={`workflow-warning-${issue.code}-${index}`}>
               {issue.path ? `${issue.path}：` : ''}{issue.message} <code>{issue.code}</code>
@@ -780,40 +725,30 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
 
       {builderOpen ? (
         <section className="workflow-builder">
-          <h3 style={{ marginTop: 0 }}>拖拽步骤编排</h3>
-          <p style={{ fontSize: 12, opacity: 0.75, marginTop: 0 }}>
+          <h3>拖拽步骤编排</h3>
+          <p className="workflow-builder-hint">
             按住左侧 ⋮⋮ 拖动排序；画布预览同步展示节点连线。参数使用 JSON 对象，检查不通过时不能发布。
           </p>
-          <div style={{ display: 'grid', gap: 8, gridTemplateColumns: '1fr 1fr' }}>
+          <div className="workflow-builder-grid">
             <label>
               流程 ID（小写）
-              <input value={builderId} onChange={(e) => setBuilderId(e.target.value)} style={{ width: '100%' }} />
+              <input value={builderId} onChange={(e) => setBuilderId(e.target.value)} />
             </label>
             <label>
               名称
-              <input value={builderName} onChange={(e) => setBuilderName(e.target.value)} style={{ width: '100%' }} />
+              <input value={builderName} onChange={(e) => setBuilderName(e.target.value)} />
             </label>
           </div>
-          <label style={{ display: 'block', marginTop: 8 }}>
+          <label className="workflow-builder-field">
             说明
-            <input value={builderDesc} onChange={(e) => setBuilderDesc(e.target.value)} style={{ width: '100%' }} />
+            <input value={builderDesc} onChange={(e) => setBuilderDesc(e.target.value)} />
           </label>
 
           {/* Canvas preview of builder steps */}
-          <div
-            style={{
-              marginTop: 12,
-              padding: 12,
-              borderRadius: 10,
-              background: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
-              border: '1px dashed #cbd5e1',
-              overflowX: 'auto',
-            }}
-            aria-label="编排画布预览"
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 0, minWidth: 'max-content' }}>
+          <div className="workflow-canvas" aria-label="编排画布预览">
+            <div className="workflow-canvas-track workflow-canvas-track--center">
               {builderSteps.map((step, index) => (
-                <div key={`canvas-${step.id}-${index}`} style={{ display: 'flex', alignItems: 'center' }}>
+                <div key={`canvas-${step.id}-${index}`} className="workflow-canvas-item">
                   <div
                     draggable
                     onDragStart={() => setDragIndex(index)}
@@ -823,60 +758,30 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                       setDragIndex(null);
                     }}
                     onDragEnd={() => setDragIndex(null)}
-                    style={{
-                      minWidth: 120,
-                      maxWidth: 160,
-                      padding: '10px 12px',
-                      borderRadius: 10,
-                      background: dragIndex === index ? '#dbeafe' : '#fff',
-                      border: '1px solid #94a3b8',
-                      boxShadow: '0 1px 2px rgba(15,23,42,0.06)',
-                      cursor: 'grab',
-                      fontSize: 12,
-                    }}
+                    className={`workflow-canvas-node${dragIndex === index ? ' is-dragging' : ''}`}
                   >
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    <div className="workflow-canvas-node-title">
                       {index + 1}. {stepTypeLabel(step.type)}
                     </div>
-                    <div style={{ opacity: 0.7, wordBreak: 'break-all' }}>
+                    <div className="workflow-canvas-node-meta">
                       {step.id}
                       {step.type === 'invoke' && step.agent_id ? ` · ${step.agent_id}` : ''}
                     </div>
                   </div>
                   {index < builderSteps.length - 1 ? (
-                    <div
-                      aria-hidden
-                      style={{
-                        width: 28,
-                        height: 2,
-                        background: '#64748b',
-                        position: 'relative',
-                        margin: '0 2px',
-                      }}
-                    >
-                      <span
-                        style={{
-                          position: 'absolute',
-                          right: -1,
-                          top: -3,
-                          width: 0,
-                          height: 0,
-                          borderTop: '4px solid transparent',
-                          borderBottom: '4px solid transparent',
-                          borderLeft: '6px solid #64748b',
-                        }}
-                      />
+                    <div aria-hidden className="workflow-canvas-connector">
+                      <span className="workflow-canvas-arrow" />
                     </div>
                   ) : null}
                 </div>
               ))}
               {!builderSteps.length ? (
-                <span style={{ fontSize: 12, opacity: 0.6 }}>添加步骤后在此预览</span>
+                <span className="workflow-canvas-empty">添加步骤后在此预览</span>
               ) : null}
             </div>
           </div>
 
-          <div style={{ marginTop: 12 }}>
+          <div className="workflow-builder-steps">
             {builderSteps.map((step, index) => (
               <div
                 key={`${step.id}-${index}`}
@@ -888,30 +793,19 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                   setDragIndex(null);
                 }}
                 onDragEnd={() => setDragIndex(null)}
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  alignItems: 'center',
-                  marginBottom: 8,
-                  flexWrap: 'wrap',
-                  padding: 8,
-                  borderRadius: 8,
-                  border: '1px solid var(--border, #e5e7eb)',
-                  background: dragIndex === index ? 'rgba(37,99,235,0.08)' : 'transparent',
-                  cursor: 'grab',
-                }}
+                className={`workflow-builder-step${dragIndex === index ? ' is-dragging' : ''}`}
               >
-                <span style={{ width: 20, opacity: 0.5, userSelect: 'none' }} title="拖动排序">
+                <span className="workflow-builder-step-handle" title="拖动排序">
                   ⋮⋮
                 </span>
-                <span style={{ width: 24 }}>{index + 1}.</span>
+                <span className="workflow-builder-step-index">{index + 1}.</span>
                 <input
                   value={step.id}
                   onChange={(e) => {
                     const v = e.target.value;
                     setBuilderSteps((cur) => cur.map((s, i) => (i === index ? { ...s, id: v } : s)));
                   }}
-                  style={{ width: 80 }}
+                  className="workflow-builder-step-id"
                   placeholder="步骤id"
                 />
                 <select
@@ -937,7 +831,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                       );
                     }}
                     placeholder="agent_id"
-                    style={{ width: 140 }}
+                    className="workflow-builder-step-agent"
                   />
                 ) : null}
                 <textarea
@@ -949,7 +843,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                   }}
                   placeholder={'参数 JSON，例如 {"key":"value"}'}
                   rows={2}
-                  style={{ minWidth: 220, flex: '1 1 220px', fontFamily: 'monospace', fontSize: 12 }}
+                  className="workflow-builder-step-params"
                 />
                 <button type="button" className="secondary-action" onClick={() => moveStep(index, -1)}>
                   ↑
@@ -967,7 +861,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
               </div>
             ))}
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+          <div className="workflow-builder-actions">
             <button
               type="button"
               className="secondary-action"
@@ -1121,16 +1015,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                     <span>{defSteps.length} 个节点</span>
                   </div>
                   {canvasMode ? (
-                    <div
-                      style={{
-                        marginTop: 8,
-                        padding: 12,
-                        borderRadius: 10,
-                        background: 'linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%)',
-                        border: '1px dashed #cbd5e1',
-                        overflowX: 'auto',
-                      }}
-                    >
+                    <div className="workflow-canvas">
                       <WorkflowCanvasNodes steps={defSteps} />
                     </div>
                   ) : (
@@ -1164,7 +1049,6 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                   value={inputText}
                   onChange={(e) => setInputText(e.target.value)}
                   rows={4}
-                  style={{ width: '100%', marginTop: 6 }}
                 />
                 </label>
                 <label className="workflow-field">
@@ -1173,7 +1057,6 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                   value={preferred}
                   onChange={(e) => setPreferred(e.target.value)}
                   placeholder="local.summary"
-                  style={{ width: '100%', marginTop: 6 }}
                 />
                 </label>
               </section>
@@ -1285,9 +1168,9 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
               ) : null}
 
               {routeResult ? (
-                <section className="artifact-sources" style={{ marginTop: 16 }} aria-label="路由结果">
+                <section className="artifact-sources" aria-label="路由结果">
                   <strong>路由结果</strong>
-                  <p style={{ fontSize: 13 }}>
+                  <p className="workflow-route-summary">
                     选中：<code>{String(routeResult.selected_agent_id || '—')}</code>
                     {routeResult.agent_run_id ? (
                       <>
@@ -1303,22 +1186,22 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                     ) : null}
                   </p>
                   {Array.isArray(routeResult.candidates) ? (
-                    <table style={{ width: '100%', fontSize: 12, borderCollapse: 'collapse' }}>
+                    <table className="workflow-route-table">
                       <thead>
-                        <tr style={{ textAlign: 'left', borderBottom: '1px solid #e5e7eb' }}>
-                          <th style={{ padding: 4 }}>Agent</th>
-                          <th style={{ padding: 4 }}>分</th>
-                          <th style={{ padding: 4 }}>成本µ</th>
-                          <th style={{ padding: 4 }}>延迟</th>
+                        <tr>
+                          <th>Agent</th>
+                          <th>分</th>
+                          <th>成本µ</th>
+                          <th>延迟</th>
                         </tr>
                       </thead>
                       <tbody>
                         {(routeResult.candidates as Array<Record<string, unknown>>).map((c) => (
-                          <tr key={String(c.agent_id)} style={{ borderBottom: '1px solid #eee' }}>
-                            <td style={{ padding: 4 }}>{String(c.agent_id)}</td>
-                            <td style={{ padding: 4 }}>{String(c.score)}</td>
-                            <td style={{ padding: 4 }}>{String(c.cost_per_call_micros)}</td>
-                            <td style={{ padding: 4 }}>{String(c.avg_latency_ms)} ms</td>
+                          <tr key={String(c.agent_id)}>
+                            <td>{String(c.agent_id)}</td>
+                            <td>{String(c.score)}</td>
+                            <td>{String(c.cost_per_call_micros)}</td>
+                            <td>{String(c.avg_latency_ms)} ms</td>
                           </tr>
                         ))}
                       </tbody>
@@ -1328,7 +1211,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
               ) : null}
 
               {runResult ? (
-                <section className="artifact-sources" style={{ marginTop: 16 }} aria-label="运行步骤">
+                <section className="artifact-sources" aria-label="运行步骤">
                   <strong>
                     运行状态：{STATUS_LABEL[runResult.status] || runResult.status}
                     {runResult.error ? ` · ${runResult.error}` : ''}
@@ -1340,7 +1223,7 @@ export function WorkflowsPage({ initialWorkflowId = '', onOpenTaskCenter }: Work
                         {s.latency_ms != null ? ` · ${s.latency_ms}ms` : ''}
                         {s.error ? ` · ${s.error}` : ''}
                         {s.output && typeof s.output === 'object' && 'output' in s.output ? (
-                          <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>
+                          <div className="workflow-run-output">
                             {String((s.output as { output?: string }).output || '').slice(0, 200)}
                           </div>
                         ) : null}

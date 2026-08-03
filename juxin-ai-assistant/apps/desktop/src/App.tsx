@@ -367,9 +367,13 @@ function Workspace({ session }: { session: SessionPayload }) {
       <aside className="sidebar">
         <div className="brand-mark" aria-label="聚信 AI 助手 · 私人工作助理">
           <img alt="" aria-hidden="true" src={juxinAiLogo} />
-          <strong className="brand-label">聚信 AI 助手 · 私人工作助理</strong>
+          <span className="brand-text">
+            <strong className="brand-label">聚信 AI 助手</strong>
+            <small className="brand-sub">私人工作助理</small>
+          </span>
         </div>
         <nav aria-label="主导航" className="sidebar-main-nav">
+          <span aria-hidden="true" className="nav-group-caption">主导航</span>
           <button aria-label="对话" title="对话" aria-current={page === 'chat' ? 'page' : undefined} className={page === 'chat' ? 'is-current' : ''} onClick={() => setPage('chat')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="chat" /></span><span className="nav-label">对话</span></button>
           <button aria-label="项目" title="项目" aria-current={page === 'project-workspace' ? 'page' : undefined} className={page === 'project-workspace' ? 'is-current' : ''} onClick={() => setPage('project-workspace')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="project" /></span><span className="nav-label">项目</span></button>
           <button aria-label="任务与交付" title={taskNavigationTitle} aria-current={isTaskDeliveryPage ? 'page' : undefined} className={isTaskDeliveryPage ? 'is-current' : ''} onClick={() => setPage('tasks')} type="button">
@@ -386,6 +390,7 @@ function Workspace({ session }: { session: SessionPayload }) {
           {canViewEnterprise ? <button aria-label="企业洞察" title="企业洞察" aria-current={isEnterpriseInsightPage ? 'page' : undefined} className={isEnterpriseInsightPage ? 'is-current' : ''} onClick={() => setPage('enterprise-overview')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="enterprise" /></span><span className="nav-label">企业洞察</span></button> : null}
         </nav>
         <nav aria-label="管理与设置" className="sidebar-utility-nav">
+          <span aria-hidden="true" className="nav-group-caption">管理与设置</span>
           {canManageEnterprise ? <button aria-label="管理中心" title="管理中心" aria-current={isManagementPage ? 'page' : undefined} className={isManagementPage ? 'is-current' : ''} onClick={() => setPage(isAdmin ? 'governance' : 'enterprise-management')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="management" /></span><span className="nav-label">管理中心</span></button> : null}
           {!isAdmin && canReadAudit ? <button aria-label="审计日志" title="审计日志" aria-current={page === 'audit' ? 'page' : undefined} className={page === 'audit' ? 'is-current' : ''} onClick={() => setPage('audit')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="audit" /></span><span className="nav-label">审计日志</span></button> : null}
           <button aria-label="设置" title="设置" aria-current={page === 'models' ? 'page' : undefined} className={page === 'models' ? 'is-current' : ''} onClick={() => setPage('models')} type="button"><span className="nav-icon" aria-hidden="true"><SidebarIcon name="settings" /></span><span className="nav-label">设置</span></button>
@@ -393,6 +398,7 @@ function Workspace({ session }: { session: SessionPayload }) {
         </nav>
         <div className="sidebar-foot">
           {capabilities.canUseAutoUpdater ? <WorkspaceUpdateControl /> : null}
+          <span aria-hidden="true" className="user-avatar">{session.user.username.slice(0, 1)}</span>
           <span className="presence-dot" />
           <div>
             <strong>{session.user.username}</strong>

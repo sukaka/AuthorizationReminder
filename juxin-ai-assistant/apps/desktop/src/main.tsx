@@ -3,7 +3,8 @@ import { createRoot } from 'react-dom/client';
 
 import App from './App';
 import { ThemeProvider } from './theme/ThemeProvider';
-import './theme/tokens.css';
+import './theme/index.css';
+import './theme/tailwind.css';
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

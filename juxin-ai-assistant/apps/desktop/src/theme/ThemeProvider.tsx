@@ -1,8 +1,4 @@
 import {
-  ConfigProvider,
-  theme as antdTheme,
-} from 'antd';
-import {
   createContext,
   type PropsWithChildren,
   useContext,
@@ -70,38 +66,23 @@ export function ThemeProvider({ children }: PropsWithChildren) {
 
   return (
     <ThemeContext.Provider value={value}>
-      <ConfigProvider
-        theme={{
-          algorithm:
-            resolvedTheme === 'dark'
-              ? antdTheme.darkAlgorithm
-              : antdTheme.defaultAlgorithm,
-          token: {
-            colorPrimary: resolvedTheme === 'dark' ? '#0a84ff' : '#007aff',
-            borderRadius: 10,
-            fontFamily:
-              '"SF Pro Text", "PingFang SC", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-          },
-        }}
-      >
-        {children}
-        <div className="theme-switcher" aria-label="外观">
-          {([
-            ['system', '跟随系统'],
-            ['light', '浅色'],
-            ['dark', '深色'],
-          ] as const).map(([value, label]) => (
-            <button
-              className={choice === value ? 'is-active' : ''}
-              key={value}
-              onClick={() => setChoice(value)}
-              type="button"
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </ConfigProvider>
+      {children}
+      <div className="theme-switcher" aria-label="外观">
+        {([
+          ['system', '跟随系统'],
+          ['light', '浅色'],
+          ['dark', '深色'],
+        ] as const).map(([value, label]) => (
+          <button
+            className={choice === value ? 'is-active' : ''}
+            key={value}
+            onClick={() => setChoice(value)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
     </ThemeContext.Provider>
   );
 }

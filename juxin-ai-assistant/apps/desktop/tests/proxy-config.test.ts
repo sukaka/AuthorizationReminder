@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
+import { readThemeCss } from './helpers/themeCss';
+
 const appRoot = resolve(__dirname, '..');
 
 const requiredApiPrefixes = [
@@ -35,7 +37,7 @@ describe('desktop runtime API proxy config', () => {
 
 describe('desktop modal layering', () => {
   it('keeps the chat upload dialog above the fixed theme switcher', () => {
-    const css = readFileSync(resolve(appRoot, 'src/theme/tokens.css'), 'utf8');
+    const css = readThemeCss();
     const uploadDialogRule = css.match(/\.chat-upload-dialog\s*\{(?<body>[^}]+)\}/)?.groups?.body || '';
     const themeSwitcherRule = css.match(/\.theme-switcher\s*\{(?<body>[^}]+)\}/)?.groups?.body || '';
     const uploadZIndex = Number(uploadDialogRule.match(/z-index:\s*(\d+)/)?.[1] || 0);

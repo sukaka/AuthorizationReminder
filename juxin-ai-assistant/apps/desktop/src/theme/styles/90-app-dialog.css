@@ -1,0 +1,90 @@
+.app-dialog {
+  width: min(520px, calc(100vw - 32px));
+  max-height: min(680px, calc(100vh - 32px));
+  padding: 0;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text-primary);
+  box-shadow: 0 24px 80px color-mix(in srgb, #000 35%, transparent);
+}
+
+.app-dialog::backdrop {
+  background: color-mix(in srgb, #07101f 58%, transparent);
+  backdrop-filter: blur(3px);
+}
+
+.app-dialog__surface {
+  display: grid;
+  gap: 16px;
+  padding: 24px;
+}
+
+.app-dialog__surface h2 {
+  margin: 0;
+  font-size: 20px;
+  line-height: 1.35;
+}
+
+.app-dialog__message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.65;
+  white-space: pre-line;
+}
+
+.app-dialog__field {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+}
+
+.app-dialog__field:focus-visible,
+.app-dialog__button:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 42%, transparent);
+  outline-offset: 2px;
+}
+
+.app-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.app-dialog__button {
+  min-height: 44px;
+  padding: 9px 18px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.app-dialog__button--secondary {
+  border-color: var(--border);
+  background: var(--surface);
+  color: var(--text-secondary);
+}
+
+.app-dialog__button--primary {
+  background: var(--accent);
+  color: var(--accent-contrast, #fff);
+}
+
+.app-dialog__button--danger {
+  background: var(--danger, #c43d4b);
+  color: #fff;
+}

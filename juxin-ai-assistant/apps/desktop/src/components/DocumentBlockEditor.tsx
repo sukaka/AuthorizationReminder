@@ -414,7 +414,6 @@ export function DocumentBlockEditor({
         <div className="document-block-editor-media">
           <div
             className={`document-block-editor-media-figure is-align-${presentation.alignment}`}
-            style={{ textAlign: presentation.alignment }}
           >
             {url ? (
               <img

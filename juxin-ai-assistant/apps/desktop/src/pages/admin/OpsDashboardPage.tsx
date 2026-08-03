@@ -52,9 +52,9 @@ function statusLabel(status: string): string {
 }
 
 function statusColor(status: string): string {
-  if (status === 'pass') return '#0d7a3f';
-  if (status === 'fail') return '#b42318';
-  return '#667085';
+  if (status === 'pass') return 'var(--success-text)';
+  if (status === 'fail') return 'var(--danger-text)';
+  return 'var(--text-secondary)';
 }
 
 function formatMetricValue(item: GaReportPayload['items'][number]): string {
@@ -243,35 +243,32 @@ export function OpsDashboardPage() {
 
       {readiness ? (
         <div
+          className="ops-card ops-card--readiness"
           style={{
-            marginBottom: 16,
-            border: '1px solid var(--border, #e5e7eb)',
-            borderRadius: 10,
-            padding: 14,
             background:
               readiness.overall === 'ready'
-                ? 'rgba(13,122,63,0.06)'
+                ? 'color-mix(in srgb, var(--success) 8%, transparent)'
                 : readiness.overall === 'not_ready'
-                  ? 'rgba(180,35,24,0.06)'
-                  : 'var(--panel-muted, #f6f7f9)',
+                  ? 'color-mix(in srgb, var(--danger) 8%, transparent)'
+                  : 'var(--background)',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <div className="ops-card-header">
             <div>
-              <h3 style={{ margin: 0 }}>一键就绪检查</h3>
-              <p style={{ margin: '6px 0 0', fontSize: 13 }}>
+              <h3 className="ops-heading">一键就绪检查</h3>
+              <p className="ops-summary">
                 状态：<strong>{readiness.overall}</strong>
                 {' · '}通过 {readiness.pass_count} / 警告 {readiness.warn_count} / 失败{' '}
                 {readiness.fail_count}
                 {' · '}{readiness.elapsed_ms} ms
               </p>
-              <p style={{ margin: '4px 0 0', fontSize: 12, opacity: 0.8 }}>{readiness.recommendation}</p>
+              <p className="ops-note">{readiness.recommendation}</p>
             </div>
             <button type="button" className="secondary-action" onClick={() => void reload()}>
               重新检查
             </button>
           </div>
-          <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 13 }}>
+          <ul className="ops-check-list">
             {readiness.checks.map((c) => (
               <li key={c.id} style={{ color: statusColor(c.status === 'warn' ? 'unknown' : c.status) }}>
                 [{c.status}] {c.name}
@@ -284,38 +281,29 @@ export function OpsDashboardPage() {
       ) : null}
 
       {security || hubHealth ? (
-        <div
-          style={{
-            marginBottom: 16,
-            display: 'grid',
-            gap: 12,
-            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-          }}
-        >
+        <div className="ops-audit-grid">
           {security ? (
             <div
+              className="ops-card"
               style={{
-                border: '1px solid var(--border, #e5e7eb)',
-                borderRadius: 10,
-                padding: 14,
                 background:
                   security.overall === 'pass'
-                    ? 'rgba(13,122,63,0.06)'
+                    ? 'color-mix(in srgb, var(--success) 8%, transparent)'
                     : security.overall === 'fail'
-                      ? 'rgba(180,35,24,0.06)'
-                      : 'var(--panel-muted, #f6f7f9)',
+                      ? 'color-mix(in srgb, var(--danger) 8%, transparent)'
+                      : 'var(--background)',
               }}
             >
-              <h3 style={{ margin: 0 }}>安全与特权审计</h3>
-              <p style={{ margin: '6px 0 0', fontSize: 13 }}>
+              <h3 className="ops-heading">安全与特权审计</h3>
+              <p className="ops-summary">
                 状态：<strong>{security.overall}</strong>
                 {' · '}通过 {security.pass_count} / 警告 {security.warn_count} / 失败{' '}
                 {security.fail_count}
               </p>
-              <p style={{ margin: '4px 0 8px', fontSize: 12, opacity: 0.8 }}>
+              <p className="ops-note ops-note--spaced">
                 {security.recommendation}
               </p>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+              <ul className="ops-audit-list">
                 {security.checks.map((c) => (
                   <li
                     key={c.id}
@@ -329,20 +317,14 @@ export function OpsDashboardPage() {
             </div>
           ) : null}
           {hubHealth ? (
-            <div
-              style={{
-                border: '1px solid var(--border, #e5e7eb)',
-                borderRadius: 10,
-                padding: 14,
-              }}
-            >
-              <h3 style={{ margin: 0 }}>Agent Hub 健康</h3>
-              <p style={{ margin: '6px 0 8px', fontSize: 13 }}>
+            <div className="ops-card">
+              <h3 className="ops-heading">Agent Hub 健康</h3>
+              <p className="ops-summary ops-summary--spaced">
                 状态：<strong>{hubHealth.overall}</strong>
                 {' · '}
                 {hubHealth.healthy}/{hubHealth.total} 健康
               </p>
-              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12 }}>
+              <ul className="ops-audit-list">
                 {hubHealth.items.map((item) => (
                   <li key={String(item.agent_id)}>
                     {String(item.agent_id)} · {String(item.status || (item.ok ? 'ok' : 'down'))}
@@ -358,30 +340,27 @@ export function OpsDashboardPage() {
 
       {ga ? (
         <div
+          className="ops-card ops-card--ga"
           style={{
-            marginBottom: 20,
-            border: '1px solid var(--border, #e5e7eb)',
-            borderRadius: 10,
-            padding: 16,
             background:
               ga.overall === 'ready'
-                ? 'rgba(13,122,63,0.06)'
+                ? 'color-mix(in srgb, var(--success) 8%, transparent)'
                 : ga.overall === 'blocked'
-                  ? 'rgba(180,35,24,0.06)'
-                  : 'var(--panel-muted, #f6f7f9)',
+                  ? 'color-mix(in srgb, var(--danger) 8%, transparent)'
+                  : 'var(--background)',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
+          <div className="ops-card-header ops-card-header--ga">
             <div>
-              <h3 style={{ margin: 0 }}>GA 发布门禁</h3>
-              <p style={{ margin: '6px 0 0', fontSize: 13, opacity: 0.85 }}>
+              <h3 className="ops-heading">GA 发布门禁</h3>
+              <p className="ops-summary ops-summary--muted">
                 状态：<strong>{overallLabel(ga.overall)}</strong>
                 {' · '}
                 通过 {ga.summary.passed} / 未通过 {ga.summary.failed} / 待计量 {ga.summary.unknown}
                 （共 {ga.summary.total} 项，样本 {ga.summary.sample_limit}）
               </p>
             </div>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            <div className="ops-button-row">
               <button
                 type="button"
                 className="secondary-action"
@@ -437,40 +416,40 @@ export function OpsDashboardPage() {
             </div>
           </div>
           {checkpointSuite ? (
-            <p style={{ margin: '10px 0 0', fontSize: 12, opacity: 0.85 }}>
+            <p className="ops-checkpoint-note">
               最近 checkpoint 套件：{checkpointSuite.recovered}/{checkpointSuite.total} · rate{' '}
               {checkpointSuite.recovery_rate}（目标 ≥ {checkpointSuite.target}）·{' '}
-              <strong style={{ color: checkpointSuite.passed ? '#0d7a3f' : '#b42318' }}>
+              <strong style={{ color: checkpointSuite.passed ? 'var(--success-text)' : 'var(--danger-text)' }}>
                 {checkpointSuite.passed ? '通过' : '未通过'}
               </strong>
             </p>
           ) : null}
-          <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse', fontSize: 13 }}>
+          <table className="ops-table">
             <thead>
-              <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border, #e5e7eb)' }}>
-                <th style={{ padding: '8px 4px' }}>指标</th>
-                <th style={{ padding: '8px 4px' }}>门槛</th>
-                <th style={{ padding: '8px 4px' }}>实测</th>
-                <th style={{ padding: '8px 4px' }}>结论</th>
-                <th style={{ padding: '8px 4px' }}>说明</th>
+              <tr>
+                <th>指标</th>
+                <th>门槛</th>
+                <th>实测</th>
+                <th>结论</th>
+                <th>说明</th>
               </tr>
             </thead>
             <tbody>
               {ga.items.map((item) => (
-                <tr key={item.key} style={{ borderBottom: '1px solid var(--border, #eee)' }}>
-                  <td style={{ padding: '8px 4px' }}>{item.name}</td>
-                  <td style={{ padding: '8px 4px' }}>{item.target}</td>
-                  <td style={{ padding: '8px 4px' }}>{formatMetricValue(item)}</td>
-                  <td style={{ padding: '8px 4px', color: statusColor(item.status), fontWeight: 600 }}>
+                <tr key={item.key}>
+                  <td>{item.name}</td>
+                  <td>{item.target}</td>
+                  <td>{formatMetricValue(item)}</td>
+                  <td className="ops-status-cell" style={{ color: statusColor(item.status) }}>
                     {statusLabel(item.status)}
                   </td>
-                  <td style={{ padding: '8px 4px', opacity: 0.8 }}>{item.detail || '—'}</td>
+                  <td className="ops-detail-cell">{item.detail || '—'}</td>
                 </tr>
               ))}
             </tbody>
           </table>
           {ga.notes?.length ? (
-            <ul style={{ margin: '12px 0 0', paddingLeft: 18, fontSize: 12, opacity: 0.8 }}>
+            <ul className="ops-ga-notes">
               {ga.notes.map((n) => (
                 <li key={n}>{n}</li>
               ))}
@@ -480,10 +459,7 @@ export function OpsDashboardPage() {
       ) : null}
 
       {snapshot ? (
-        <div
-          className="admin-stat-grid"
-          style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 12 }}
-        >
+        <div className="admin-stat-grid">
           <Stat label="Run 总数" value={snapshot.runs_total} />
           <Stat label="成功" value={snapshot.runs_succeeded} />
           <Stat label="失败" value={snapshot.runs_failed} />
@@ -497,27 +473,19 @@ export function OpsDashboardPage() {
         </div>
       ) : null}
 
-      <section
-        aria-label="按 Run ID 控制"
-        style={{
-          marginTop: 20,
-          border: '1px solid var(--border, #e5e7eb)',
-          borderRadius: 10,
-          padding: 14,
-        }}
-      >
-        <h3 style={{ margin: 0 }}>按 Run ID 控制任务</h3>
-        <p style={{ margin: '6px 0 12px', fontSize: 12, opacity: 0.8 }}>
+      <section aria-label="按 Run ID 控制" className="ops-card ops-section">
+        <h3 className="ops-heading">按 Run ID 控制任务</h3>
+        <p className="ops-form-hint">
           查询单个任务的 Run / Step / Event 链路，并执行可审计的暂停、恢复或内部检查点回滚。
         </p>
         <form
+          className="ops-lookup-form"
           onSubmit={(event) => {
             event.preventDefault();
             void loadRunDetail();
           }}
-          style={{ display: 'flex', gap: 8, alignItems: 'end', flexWrap: 'wrap' }}
         >
-          <label style={{ display: 'grid', gap: 4, flex: '1 1 280px', fontSize: 12 }}>
+          <label className="ops-lookup-field">
             Run ID
             <input
               aria-label="Run ID"
@@ -531,20 +499,20 @@ export function OpsDashboardPage() {
           </button>
         </form>
         {runDetail ? (
-          <div style={{ marginTop: 12, fontSize: 13 }}>
-            <p style={{ margin: 0 }}>
+          <div className="ops-run-detail">
+            <p className="ops-run-line">
               <code>{runDetail.run.run_id}</code>
               {' · '}状态：{runDetail.run.status}
               {' · '}阶段：{runDetail.run.stage}
               {' · '}进度：{runDetail.run.progress}%
             </p>
-            <p style={{ margin: '6px 0 0' }}>
+            <p className="ops-run-subline">
               范围对账：{runDetail.reconciliation.overall === 'pass' ? '通过' : '发现不一致'}
               {' · '}Step {runDetail.steps.length} 个
               {' · '}Event {runDetail.events.length} 个
             </p>
             {runDetail.steps.length ? (
-              <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
+              <ul className="ops-run-steps">
                 {runDetail.steps.map((step) => (
                   <li key={step.step_id || `${step.sequence}-${step.step_type}`}>
                     Step {step.sequence} · {step.step_type} · {step.status}
@@ -552,7 +520,7 @@ export function OpsDashboardPage() {
                 ))}
               </ul>
             ) : null}
-            <div style={{ display: 'flex', gap: 8, marginTop: 12, flexWrap: 'wrap' }}>
+            <div className="ops-run-actions">
               <button
                 type="button"
                 disabled={runBusy || !['running', 'waiting_confirmation'].includes(runDetail.run.status)}
@@ -575,7 +543,7 @@ export function OpsDashboardPage() {
                 回滚到安全检查点
               </button>
             </div>
-            <p style={{ margin: '10px 0 0', color: '#b54708', fontSize: 12 }}>
+            <p className="ops-run-warning">
               回滚只恢复内部安全检查点，不会撤销已发生的外部副作用；结果未知时必须先对账，禁止直接重发。
             </p>
           </div>
@@ -584,33 +552,30 @@ export function OpsDashboardPage() {
 
       {runReconciliation ? (
         <div
+          className="ops-card ops-section"
           style={{
-            marginTop: 20,
-            border: '1px solid var(--border, #e5e7eb)',
-            borderRadius: 10,
-            padding: 14,
             background:
               runReconciliation.overall === 'pass'
-                ? 'rgba(13,122,63,0.06)'
-                : 'rgba(180,35,24,0.06)',
+                ? 'color-mix(in srgb, var(--success) 8%, transparent)'
+                : 'color-mix(in srgb, var(--danger) 8%, transparent)',
           }}
         >
-          <h3 style={{ margin: 0 }}>Run / Step / Event 对账</h3>
-          <p style={{ margin: '6px 0 0', fontSize: 13 }}>
+          <h3 className="ops-heading">Run / Step / Event 对账</h3>
+          <p className="ops-summary">
             状态：<strong>{runReconciliation.overall === 'pass' ? '通过' : '发现不一致'}</strong>
             {' · '}扫描 {runReconciliation.scanned_runs} 个 Run
             {' · '}问题 {runReconciliation.issue_count} 个
           </p>
           {snapshot ? (
-            <p style={{ margin: '6px 0 0', fontSize: 12, opacity: 0.8 }}>
+            <p className="ops-snapshot-note">
               连续观测快照：
               <strong
                 style={{
                   color:
                     snapshot.run_reconciliation_overall === 'pass'
-                      ? '#0d7a3f'
+                      ? 'var(--success-text)'
                       : snapshot.run_reconciliation_overall === 'fail'
-                        ? '#b42318'
+                        ? 'var(--danger-text)'
                         : undefined,
                 }}
               >
@@ -625,7 +590,7 @@ export function OpsDashboardPage() {
             </p>
           ) : null}
           {runReconciliation.issues.length ? (
-            <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 12 }}>
+            <ul className="ops-issue-list">
               {runReconciliation.issues.slice(0, 20).map((issue, index) => (
                 <li key={`${issue.run_id}-${issue.code}-${index}`}>
                   <strong>{issue.code}</strong> · {issue.entity} · {issue.run_id.slice(0, 8)} ·{' '}
@@ -634,7 +599,7 @@ export function OpsDashboardPage() {
               ))}
             </ul>
           ) : (
-            <p style={{ margin: '10px 0 0', fontSize: 12, opacity: 0.8 }}>
+            <p className="ops-hint">
               当前样本的状态、序号和终态回执一致。
             </p>
           )}
@@ -643,21 +608,18 @@ export function OpsDashboardPage() {
 
       {snapshot?.slo_audit ? (
         <div
+          className="ops-card ops-section"
           style={{
-            marginTop: 20,
-            border: '1px solid var(--border, #e5e7eb)',
-            borderRadius: 10,
-            padding: 14,
             background:
               snapshot.slo_audit.overall === 'fail'
-                ? 'rgba(180,35,24,0.06)'
+                ? 'color-mix(in srgb, var(--danger) 8%, transparent)'
                 : snapshot.slo_audit.overall === 'pass'
-                  ? 'rgba(13,122,63,0.06)'
-                  : 'var(--panel-muted, #f6f7f9)',
+                  ? 'color-mix(in srgb, var(--success) 8%, transparent)'
+                  : 'var(--background)',
           }}
         >
-          <h3 style={{ margin: 0 }}>Agent Loop SLO 审计</h3>
-          <p style={{ margin: '6px 0 0', fontSize: 13 }}>
+          <h3 className="ops-heading">Agent Loop SLO 审计</h3>
+          <p className="ops-summary">
             状态：
             <strong
               style={{
@@ -673,7 +635,7 @@ export function OpsDashboardPage() {
             {' · '}硬失败 {snapshot.slo_audit.fail_count}
             {' · '}未观测 {snapshot.slo_audit.gap_count}
           </p>
-          <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 12 }}>
+          <ul className="ops-issue-list">
             {snapshot.slo_audit.checks.map((check) => (
               <li key={check.id} style={{ color: statusColor(check.status === 'not_observed' ? 'unknown' : check.status) }}>
                 [{statusLabel(check.status)}] {check.name}
@@ -684,7 +646,7 @@ export function OpsDashboardPage() {
             ))}
           </ul>
           {snapshot.slo_audit.notes.length ? (
-            <ul style={{ margin: '10px 0 0', paddingLeft: 18, fontSize: 12, opacity: 0.8 }}>
+            <ul className="ops-note-list">
               {snapshot.slo_audit.notes.map((note) => (
                 <li key={note}>{note}</li>
               ))}
@@ -694,11 +656,9 @@ export function OpsDashboardPage() {
       ) : null}
 
       {cost ? (
-        <div style={{ marginTop: 20 }}>
+        <div className="ops-section">
           <h3>Agent 成本与出域</h3>
-          <div
-            style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill,minmax(140px,1fr))', gap: 12 }}
-          >
+          <div className="admin-stat-grid">
             <Stat label="调用次数" value={cost.calls_total} />
             <Stat label="成功" value={cost.calls_succeeded} />
             <Stat label="出域拦截" value={cost.calls_blocked} />
@@ -709,48 +669,40 @@ export function OpsDashboardPage() {
             <Stat label="出域拒绝" value={cost.egress_denied} />
           </div>
           {cost.by_agent?.length ? (
-            <table style={{ width: '100%', marginTop: 12, borderCollapse: 'collapse', fontSize: 13 }}>
+            <table className="ops-table ops-table--compact">
               <thead>
-                <tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border, #e5e7eb)' }}>
-                  <th style={{ padding: '6px 4px' }}>Agent</th>
-                  <th style={{ padding: '6px 4px' }}>调用</th>
-                  <th style={{ padding: '6px 4px' }}>成本(µ)</th>
-                  <th style={{ padding: '6px 4px' }}>平均延迟</th>
+                <tr>
+                  <th>Agent</th>
+                  <th>调用</th>
+                  <th>成本(µ)</th>
+                  <th>平均延迟</th>
                 </tr>
               </thead>
               <tbody>
                 {cost.by_agent.map((row) => (
-                  <tr key={row.agent_id} style={{ borderBottom: '1px solid #eee' }}>
-                    <td style={{ padding: '6px 4px' }}>{row.agent_id}</td>
-                    <td style={{ padding: '6px 4px' }}>{row.calls}</td>
-                    <td style={{ padding: '6px 4px' }}>{row.cost_micros}</td>
-                    <td style={{ padding: '6px 4px' }}>{row.avg_latency_ms} ms</td>
+                  <tr key={row.agent_id}>
+                    <td>{row.agent_id}</td>
+                    <td>{row.calls}</td>
+                    <td>{row.cost_micros}</td>
+                    <td>{row.avg_latency_ms} ms</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           ) : (
-            <p style={{ fontSize: 13, opacity: 0.75 }}>暂无 Agent 调用记录。</p>
+            <p className="ops-empty-note">暂无 Agent 调用记录。</p>
           )}
         </div>
       ) : null}
 
       {market.length ? (
-        <div style={{ marginTop: 20 }}>
+        <div className="ops-section">
           <h3>Agent 市场（已安装）</h3>
-          <ul style={{ listStyle: 'none', padding: 0 }}>
+          <ul className="ops-market-list">
             {market.map((item) => (
-              <li
-                key={String(item.agent_id)}
-                style={{
-                  border: '1px solid var(--border, #e5e7eb)',
-                  borderRadius: 8,
-                  padding: 10,
-                  marginBottom: 8,
-                }}
-              >
+              <li key={String(item.agent_id)} className="ops-market-item">
                 <strong>{String(item.name || item.agent_id)}</strong>
-                <div style={{ fontSize: 12, opacity: 0.8 }}>
+                <div className="ops-item-meta">
                   {String(item.agent_id)} · {String(item.provider_name || item.provider_key)} ·{' '}
                   {String(item.status)} · 成本 {String(item.cost_per_call_micros ?? 0)} µ/次
                 </div>
@@ -761,12 +713,12 @@ export function OpsDashboardPage() {
       ) : null}
 
       {flags ? (
-        <div style={{ marginTop: 20 }}>
+        <div className="ops-section">
           <h3>功能开关 / 灰度</h3>
-          <p style={{ fontSize: 13, opacity: 0.8 }}>
+          <p className="ops-rollout-hint">
             建议路径：管理员 → 5% → 20% → 50% → 全量（主方案 Phase 6）
           </p>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 12, flexWrap: 'wrap' }}>
+          <div className="ops-rollout-row">
             <label>
               放量比例{' '}
               <input
@@ -775,7 +727,7 @@ export function OpsDashboardPage() {
                 max={100}
                 value={rollout}
                 onChange={(e) => setRollout(Number(e.target.value))}
-                style={{ width: 72 }}
+                className="ops-rollout-input"
               />
               %
             </label>
@@ -829,19 +781,13 @@ export function OpsDashboardPage() {
           <div
             role="group"
             aria-label="企业微信通道开关"
-            style={{
-              border: '1px solid var(--border, #e5e7eb)',
-              borderRadius: 10,
-              padding: 14,
-              marginBottom: 12,
-              background: 'var(--panel, #fff)',
-            }}
+            className="ops-channel-group"
           >
-            <h4 style={{ margin: 0 }}>消息通道</h4>
-            <p style={{ margin: '6px 0 12px', fontSize: 13, opacity: 0.8 }}>
+            <h4 className="ops-heading">消息通道</h4>
+            <p className="ops-channel-hint">
               开关仅负责启停通道，保存后立即生效。App ID、Secret、Token 和加密密钥等凭据仅从服务器的 .env 读取；修改 .env 后需重启 API。
             </p>
-            <div style={{ display: 'grid', gap: 10 }}>
+            <div className="ops-channel-list">
               {weComChannels.map((item) => {
                 const channels = (flags.channels as Record<string, boolean> | undefined) || {};
                 const configuration = (
@@ -859,27 +805,21 @@ export function OpsDashboardPage() {
                 return (
                   <label
                     key={item.key}
+                    className="ops-channel-item"
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 16,
-                      border: '1px solid var(--border, #e5e7eb)',
-                      borderRadius: 8,
-                      padding: '10px 12px',
                       cursor: channelSaving ? 'wait' : canToggle ? 'pointer' : 'not-allowed',
                       opacity: canToggle ? 1 : 0.78,
                     }}
                   >
                     <span>
-                      <strong style={{ display: 'block' }}>{item.label}</strong>
-                      <span style={{ display: 'block', marginTop: 3, fontSize: 12, opacity: 0.72 }}>
+                      <strong className="ops-channel-label">{item.label}</strong>
+                      <span className="ops-channel-desc">
                         {item.description} · {configured
                           ? '配置已就绪，可直接启用'
                           : `待补环境变量：${missingConfiguration.join('、') || '请检查服务器 .env'}`}
                       </span>
                       {!configured ? (
-                        <span style={{ display: 'block', marginTop: 4, fontSize: 12, color: 'var(--warning, #b54708)' }}>
+                        <span className="ops-channel-warning">
                           请在服务器 .env 补齐后重启 API，再回来开启通道。
                         </span>
                       ) : null}
@@ -897,41 +837,25 @@ export function OpsDashboardPage() {
               })}
             </div>
           </div>
-          <pre
-            style={{
-              whiteSpace: 'pre-wrap',
-              fontSize: 12,
-              background: 'var(--panel-muted, #f6f7f9)',
-              padding: 12,
-              borderRadius: 8,
-            }}
-          >
+          <pre className="ops-flags-json">
             {JSON.stringify(flags, null, 2)}
           </pre>
         </div>
       ) : null}
 
-      <div style={{ marginTop: 20 }}>
+      <div className="ops-section">
         <h3>学习候选审核</h3>
         {candidates.length === 0 ? (
           <p>暂无学习候选。</p>
         ) : (
-          <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          <ul className="ops-candidate-list">
             {candidates.map((c) => (
-              <li
-                key={c.candidate_id}
-                style={{
-                  border: '1px solid var(--border, #e5e7eb)',
-                  borderRadius: 8,
-                  padding: 12,
-                  marginBottom: 8,
-                }}
-              >
+              <li key={c.candidate_id} className="ops-candidate-item">
                 <strong>{c.title}</strong>
-                <div style={{ fontSize: 12, opacity: 0.8 }}>
+                <div className="ops-item-meta">
                   {c.candidate_type} · {c.status} · {c.candidate_id.slice(0, 8)}
                 </div>
-                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <div className="ops-candidate-actions">
                   {c.status === 'draft' ? (
                     <button type="button" onClick={() => void onTransition(c.candidate_id, 'evaluated')}>
                       标记已评测
@@ -959,9 +883,9 @@ export function OpsDashboardPage() {
 
 function Stat({ label, value }: { label: string; value: string | number }) {
   return (
-    <div style={{ border: '1px solid var(--border, #e5e7eb)', borderRadius: 8, padding: 12 }}>
-      <div style={{ fontSize: 12, opacity: 0.7 }}>{label}</div>
-      <div style={{ fontSize: 22, fontWeight: 600 }}>{value}</div>
+    <div className="admin-stat">
+      <div className="admin-stat__label">{label}</div>
+      <div className="admin-stat__value">{value}</div>
     </div>
   );
 }

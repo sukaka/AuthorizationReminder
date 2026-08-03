@@ -1,12 +1,8 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(
-  resolve(process.cwd(), 'src/theme/tokens.css'),
-  'utf8',
-);
+import { readThemeCss } from './helpers/themeCss';
+
+const css = readThemeCss();
 
 function channel(value: number): number {
   const normalized = value / 255;
@@ -138,5 +134,43 @@ describe('chat workspace layout polish', () => {
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\]\s*{[^}]*border:\s*1px solid[^;]+;[^}]*border-radius:\s*18px;[^}]*background:\s*var\(--surface-solid\);[^}]*box-shadow:/s);
     expect(css).toMatch(/\.chat-sessions > div\[data-session-status\] > button:hover,\s*\.chat-sessions > div\[data-session-status\] > button:focus-visible\s*{[^}]*background:\s*transparent;[^}]*box-shadow:\s*none;/s);
     expect(css).toMatch(/\.chat-page:not\(\.has-chat-content\) \.chat-composer\s*{[^}]*width:\s*min\(720px,\s*52vw\);/s);
+  });
+});
+
+describe('theme token ladder', () => {
+  const lightBlock = themeBlock(':root,');
+  const darkBlock = themeBlock("[data-theme='dark']");
+
+  function tokenNames(block: string): string[] {
+    return [...block.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((match) => match[1]);
+  }
+
+  it('defines the full font-size and radius ladder in the base theme', () => {
+    for (const name of [
+      '--font-size-12', '--font-size-13', '--font-size-14', '--font-size-16',
+      '--font-size-18', '--font-size-22', '--font-size-28',
+      '--radius-6', '--radius-10', '--radius-14', '--radius-20',
+    ]) {
+      expect(lightBlock, name).toContain(`${name}:`);
+    }
+  });
+
+  it('defines theme-specific elevation shadows in both themes', () => {
+    for (const name of ['--shadow-rest', '--shadow-pop']) {
+      expect(lightBlock, `light ${name}`).toContain(`${name}:`);
+      expect(darkBlock, `dark ${name}`).toContain(`${name}:`);
+    }
+  });
+
+  it('keeps color token parity between light and dark themes', () => {
+    const inherited = /^--(space|font-size|radius)-/;
+    const darkNames = new Set(tokenNames(darkBlock));
+    const lightOnly = tokenNames(lightBlock).filter(
+      (name) => !inherited.test(name),
+    );
+
+    for (const name of lightOnly) {
+      expect(darkNames.has(name), `${name} missing from dark theme`).toBe(true);
+    }
   });
 });

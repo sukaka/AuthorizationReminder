@@ -1,0 +1,49 @@
+/*
+ * Tailwind v4 wiring for the shadcn/ui migration (Phase 0).
+ *
+ * Preflight is intentionally NOT imported: the legacy stylesheet still owns
+ * all element/reset styles, so adding Tailwind changes zero pixels. Utilities
+ * map onto the runtime theme variables, so Tailwind classes always follow the
+ * active [data-theme] without any extra dark: variants.
+ *
+ * shadcn/ui CLI is configured (components.json) to treat this file as the
+ * Tailwind entry.
+ */
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities);
+
+@theme inline {
+  /* Colors → semantic theme tokens */
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-solid: var(--surface-solid);
+  --color-surface-elevated: var(--surface-elevated);
+  --color-foreground: var(--text-primary);
+  --color-muted: var(--text-secondary);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  /* Type scale → text-12 … text-28 */
+  --text-12: var(--font-size-12);
+  --text-13: var(--font-size-13);
+  --text-14: var(--font-size-14);
+  --text-16: var(--font-size-16);
+  --text-18: var(--font-size-18);
+  --text-22: var(--font-size-22);
+  --text-28: var(--font-size-28);
+
+  /* Radius scale → rounded-6 … rounded-20 */
+  --radius-6: var(--radius-6);
+  --radius-10: var(--radius-10);
+  --radius-14: var(--radius-14);
+  --radius-20: var(--radius-20);
+
+  /* Elevation → shadow-rest / shadow-pop */
+  --shadow-rest: var(--shadow-rest);
+  --shadow-pop: var(--shadow-pop);
+}

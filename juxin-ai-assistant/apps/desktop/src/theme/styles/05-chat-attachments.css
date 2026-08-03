@@ -1,0 +1,89 @@
+
+.chat-image-attachments {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 280px));
+  gap: 12px;
+  margin-top: 12px;
+}
+.chat-image-attachments a,
+.knowledge-image-preview {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface-elevated);
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-file-deliveries {
+  display: grid;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chat-file-deliveries a {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-elevated);
+  color: inherit;
+  text-decoration: none;
+}
+
+.chat-file-deliveries a:hover {
+  border-color: var(--accent);
+}
+
+.chat-file-deliveries a > span:last-child {
+  display: grid;
+  min-width: 0;
+}
+
+.chat-file-deliveries strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-file-deliveries small {
+  color: var(--text-secondary);
+}
+
+.chat-file-delivery-icon {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 700;
+}
+
+.chat-image-attachments img,
+.knowledge-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.chat-image-attachments span,
+.knowledge-image-preview figcaption {
+  display: block;
+  padding: 8px 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-image-preview {
+  grid-column: 1 / -1;
+  margin-bottom: 16px;
+}

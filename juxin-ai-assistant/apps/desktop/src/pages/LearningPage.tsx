@@ -555,7 +555,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
             <div><span>受控成长</span><h2>学习候选</h2></div>
             <small>{candidates.length} 条 · 不会自动发布到生产</small>
           </div>
-          <p style={{ fontSize: 13, opacity: 0.8 }}>
+          <p className="learning-note">
             来自任务反馈的改进草案。管理员可评测后发布；普通用户仅可查看自己的候选。
           </p>
           <div className="learning-list">
@@ -566,7 +566,7 @@ export function LearningPage({ isAdmin = false }: { isAdmin?: boolean }) {
                 <h2>{item.title}</h2>
                 <p>来源任务：{item.source_run_id ? item.source_run_id.slice(0, 8) : '—'}</p>
                 {item.payload ? (
-                  <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>
+                  <pre className="learning-payload-preview">
                     {JSON.stringify(item.payload, null, 2).slice(0, 600)}
                   </pre>
                 ) : null}

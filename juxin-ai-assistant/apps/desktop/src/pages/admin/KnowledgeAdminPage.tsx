@@ -141,12 +141,12 @@ export function KnowledgeAdminPage() {
           {selected ? <button className="danger-action" onClick={() => void disable()} type="button">停用知识</button> : null}
         </form>
       </div>
-      <section style={{ marginTop: 24, borderTop: '1px solid var(--border, #e5e7eb)', paddingTop: 16 }}>
+      <section className="governance-version-section">
         <h2>知识文件版本时间线</h2>
-        <p style={{ fontSize: 13, opacity: 0.8 }}>输入 `KnowledgeFile` UUID，查看版本链并切换生效版本（RAG 以 is_current_version 为准）。</p>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <p className="governance-version-hint">输入 `KnowledgeFile` UUID，查看版本链并切换生效版本（RAG 以 is_current_version 为准）。</p>
+        <div className="governance-version-toolbar">
           <input
-            style={{ minWidth: 280, flex: 1 }}
+            className="governance-version-input"
             placeholder="file uuid"
             value={versionFileUuid}
             onChange={(e) => setVersionFileUuid(e.target.value)}
@@ -154,26 +154,19 @@ export function KnowledgeAdminPage() {
           <button className="secondary-action" type="button" onClick={() => void loadVersions()}>加载版本</button>
         </div>
         {versionItems.length ? (
-          <ul style={{ listStyle: 'none', padding: 0 }}>
+          <ul className="governance-version-list">
             {versionItems.map((v) => (
               <li
                 key={v.file_uuid}
-                style={{
-                  border: '1px solid var(--border, #e5e7eb)',
-                  borderRadius: 8,
-                  padding: 10,
-                  marginBottom: 8,
-                  background: v.file_uuid === effectiveUuid ? 'var(--panel-muted, #f0f7ff)' : undefined,
-                }}
+                className={`governance-version-item${v.file_uuid === effectiveUuid ? ' is-effective' : ''}`}
               >
                 <strong>V{v.version}</strong> · {v.file_name || v.file_uuid.slice(0, 8)}
                 {v.is_current_version || v.file_uuid === effectiveUuid ? ' · 生效中' : ''}
-                <div style={{ fontSize: 12, opacity: 0.75 }}>{v.summary || v.review_status}</div>
+                <div className="governance-version-meta">{v.summary || v.review_status}</div>
                 {!v.is_current_version && v.file_uuid !== effectiveUuid ? (
                   <button
                     type="button"
-                    className="secondary-action"
-                    style={{ marginTop: 6 }}
+                    className="secondary-action governance-version-activate"
                     onClick={() => void activateVersion(v.file_uuid)}
                   >
                     设为生效
