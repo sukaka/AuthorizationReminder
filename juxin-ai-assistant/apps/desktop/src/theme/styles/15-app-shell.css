@@ -23,7 +23,8 @@
   padding: 20px 12px 12px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
+  z-index: 20;
   border-right: 1px solid var(--border);
   background: var(--sidebar);
   transition: opacity 160ms ease, padding 180ms ease;
@@ -308,6 +309,7 @@
 .system-switcher {
   position: relative;
   margin-left: auto;
+  z-index: 40;
 }
 
 .system-switch-button {
@@ -327,10 +329,12 @@
 
 .system-switch-menu {
   position: absolute;
-  left: 0;
+  right: 0;
+  left: auto;
   bottom: calc(100% + 8px);
   z-index: 30;
   width: 168px;
+  max-height: min(70vh, 520px);
   padding: 6px;
   border: 1px solid var(--border);
   border-radius: var(--radius-14);
@@ -338,6 +342,8 @@
   box-shadow: var(--shadow-pop);
   display: grid;
   gap: 2px;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .system-switch-menu a,

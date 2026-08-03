@@ -47,3 +47,20 @@ describe('desktop modal layering', () => {
     expect(uploadZIndex).toBeGreaterThan(themeZIndex);
   });
 });
+
+describe('desktop system switcher layering', () => {
+  it('keeps the system menu outside the sidebar clipping boundary', () => {
+    const css = readThemeCss();
+    const sidebarRule = css.match(/\.sidebar\s*\{(?<body>[^}]+)\}/)?.groups?.body || '';
+    const switcherRule = css.match(/\.system-switcher\s*\{(?<body>[^}]+)\}/)?.groups?.body || '';
+    const menuRule = css.match(/\.system-switch-menu\s*\{(?<body>[^}]+)\}/)?.groups?.body || '';
+
+    expect(sidebarRule).toContain('overflow: visible');
+    expect(sidebarRule).toContain('z-index: 20');
+    expect(switcherRule).toContain('z-index: 40');
+    expect(menuRule).toContain('right: 0');
+    expect(menuRule).toContain('left: auto');
+    expect(menuRule).toContain('max-height: min(70vh, 520px)');
+    expect(menuRule).toContain('overflow-y: auto');
+  });
+});
