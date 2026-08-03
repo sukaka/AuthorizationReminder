@@ -53,6 +53,12 @@ function displayProgress(run: Pick<AgentRunPayload, 'status' | 'stage' | 'progre
     return 100;
   }
   if (run.status === 'created' || run.status === 'queued' || run.status === 'retrying') {
+    // Legacy runs can be left in a pre-start lifecycle state after a lease
+    // heartbeat race even though their active checkpoint was persisted.
+    if (run.status === 'created'
+      && ['routing', 'retrieving', 'planning', 'executing', 'reviewing'].includes(run.stage || '')) {
+      return Math.max(0, Math.min(99, run.progress ?? 0));
+    }
     return 0;
   }
   return Math.max(0, Math.min(100, run.progress ?? 0));

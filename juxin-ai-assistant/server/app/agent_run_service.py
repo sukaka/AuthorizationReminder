@@ -153,9 +153,12 @@ class AgentRunService:
     def _assert_bound_lease(self, row: AgentRun) -> None:
         if self._lease_owner is not None and self._fencing_token is not None:
             self.assert_lease(row, self._lease_owner, self._fencing_token)
-            # Lease mutations use atomic SQL updates, so synchronize the ORM row
-            # before its next version-checked write.
-            self.db.refresh(row)
+            # Do not refresh ``row`` here. Callers invoke this guard immediately
+            # after changing lifecycle fields (for example ``mark_failed`` then
+            # ``append_event``); refreshing would silently discard those pending
+            # changes and reload the old ``created``/checkpoint state. Lease
+            # acquisition is refreshed by the runtime before binding, while
+            # heartbeats no longer advance the optimistic-lock revision.
 
     def create_run(
         self,
@@ -703,7 +706,6 @@ class AgentRunService:
             )
             .values(
                 lease_expires_at=current_time + timedelta(seconds=ttl_seconds),
-                state_revision=AgentRun.state_revision + 1,
             )
         )
         return bool(renewed.rowcount)
@@ -840,14 +842,29 @@ class AgentRunService:
             AgentRunStatus.COMPLETED.value,
         } or _enum_value(row.stage) == AgentRunStage.COMPLETED.value:
             return 100
-        if _enum_value(row.status) in {
+        status_value = _enum_value(row.status)
+        if status_value in {
             AgentRunStatus.CREATED.value,
             AgentRunStatus.QUEUED.value,
             AgentRunStatus.RETRYING.value,
         }:
-            # These lifecycle states have not started meaningful execution.
-            # Older rows may still contain the 75% draft checkpoint; it must
-            # not be presented as current task progress.
+            # A few pre-5.17.3 rows were left in ``created`` after a lease
+            # heartbeat raced the state write.  An active stage plus a durable
+            # checkpoint is evidence that execution had already started; keep
+            # that progress visible until the row is repaired or retried.
+            active_stages = {
+                AgentRunStage.ROUTING.value,
+                AgentRunStage.RETRIEVING.value,
+                AgentRunStage.PLANNING.value,
+                AgentRunStage.EXECUTING.value,
+                AgentRunStage.REVIEWING.value,
+            }
+            if status_value == AgentRunStatus.CREATED.value and _enum_value(row.stage) in active_stages:
+                try:
+                    progress = int(row.progress or 0)
+                except (TypeError, ValueError):
+                    progress = 0
+                return max(0, min(99, progress))
             return 0
         try:
             progress = int(row.progress or 0)

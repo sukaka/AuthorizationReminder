@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "juxin-ai-assistant"
-version = "5.17.2"
+version = "5.17.3"
 dependencies = [
  "base64 0.22.1",
  "chrono",

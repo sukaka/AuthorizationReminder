@@ -111,6 +111,26 @@ it('renders not-started tasks as 0% when the stored progress is stale', async ()
   expect(screen.queryByText('75%')).not.toBeInTheDocument();
 });
 
+it('keeps active checkpoint progress for legacy created tasks', async () => {
+  server.use(
+    http.get('/api/ai/runs', () => HttpResponse.json({
+      items: [{
+        run_id: 'run-legacy-active',
+        title: '处理中任务',
+        status: 'created',
+        stage: 'executing',
+        progress: 75,
+      }],
+      total: 1,
+    })),
+  );
+
+  render(<TasksPage />);
+
+  expect(await screen.findByText('处理中任务')).toBeInTheDocument();
+  expect(screen.getByText('75%')).toBeInTheDocument();
+});
+
 it('shows a safe failure reason and retries a recoverable task', async () => {
   const retryRequest = vi.fn();
   server.use(

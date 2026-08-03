@@ -69,7 +69,9 @@ def test_heartbeat_renews_from_an_independent_session(generation_db) -> None:
     generation_db.refresh(row)
     assert row.lease_owner == "worker-a"
     assert row.fencing_token == token
-    assert row.state_revision > revision_before
+    # Lease liveness is independent of the run-state revision.  Incrementing
+    # the optimistic-lock column here races the worker's checkpoint writes.
+    assert row.state_revision == revision_before
 
 
 def test_crashed_worker_cannot_renew_or_write_after_takeover(generation_db) -> None:

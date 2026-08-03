@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from app.agent_contracts import AgentRunStage, AgentRunStatus
+from app.agent_contracts import AgentEventType, AgentRunStage, AgentRunStatus
 from app.agent_run_service import AgentRunService, BudgetExceededError, LeaseLostError
 from app.chat_service import _latest_task_state_payload
 from app.crypto import ContentCipher
@@ -181,6 +181,42 @@ def test_not_started_run_does_not_expose_stale_checkpoint_progress(generation_db
 
     assert payload.status is AgentRunStatus.CREATED
     assert payload.progress == 0
+
+
+def test_created_run_with_active_checkpoint_keeps_real_progress_visible(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(owner_user_id="user-a", input_text="心跳冲突后的任务")
+    row.stage = "executing"
+    row.progress = 75
+    generation_db.commit()
+
+    payload = service.to_public_run(row)
+
+    assert payload.status is AgentRunStatus.CREATED
+    assert payload.progress == 75
+
+
+def test_bound_lease_guard_does_not_discard_lifecycle_transition(generation_db) -> None:
+    service = AgentRunService(generation_db, _cipher())
+    row = service.create_run(owner_user_id="user-a", input_text="状态落库")
+    token = service.acquire_lease(row.uuid, "worker-a")
+    assert token is not None
+    generation_db.commit()
+    generation_db.refresh(row)
+    service.bind_lease("worker-a", token)
+
+    service.mark_running(row)
+    service.append_event(
+        row,
+        event_type=AgentEventType.STAGE,
+        stage=AgentRunStage.ROUTING,
+        label="开始执行",
+        progress=40,
+        event_key="status-transition-test",
+    )
+
+    assert row.status == AgentRunStatus.RUNNING.value
+    assert row.stage == AgentRunStage.ROUTING.value
 
 
 def test_professional_success_always_uses_full_progress(generation_db) -> None:
