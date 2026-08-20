@@ -22,6 +22,7 @@ COPY auth/csrf-security.js ./auth/csrf-security.js
 COPY auth/password-security.js ./auth/password-security.js
 COPY auth/session-security.js ./auth/session-security.js
 COPY auth/security-bootstrap.js ./auth/security-bootstrap.js
+COPY auth/social-login.js ./auth/social-login.js
 COPY server/cors-origin.js ./server/cors-origin.js
 COPY server/helmet-csp.js ./server/helmet-csp.js
 COPY server/security-strict-mode.js ./server/security-strict-mode.js

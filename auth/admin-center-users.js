@@ -110,6 +110,28 @@ const validatePhoneFormat = (phone) => {
   return '';
 };
 
+const normalizeExternalIdentity = (value, label) => {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  if (normalized.length > 255 || /[\u0000-\u001f\u007f]/.test(normalized)) {
+    throw createHttpError(400, `${label}格式不正确`);
+  }
+  return normalized;
+};
+
+const assertExternalIdentityAvailable = async ({ db, field, label, value, targetId = null }) => {
+  const normalized = normalizeExternalIdentity(value, label);
+  if (!normalized) return null;
+  const excludingTarget = Number.isInteger(Number(targetId)) && Number(targetId) > 0;
+  const params = excludingTarget ? [normalized, Number(targetId)] : [normalized];
+  const duplicate = await db.get(
+    `SELECT id FROM users WHERE ${field} = ?${excludingTarget ? ' AND id <> ?' : ''} LIMIT 1`,
+    params
+  );
+  if (duplicate) throw createHttpError(400, `${label} 已绑定其他账号`);
+  return normalized;
+};
+
 const createHttpError = (statusCode, message) => {
   const error = new Error(message);
   error.statusCode = statusCode;
@@ -158,10 +180,18 @@ const createAdminCenterUsersService = ({
   if (!db || typeof db !== 'object') throw new Error('db adapter is required');
 
   return {
-    async listUsers() {
+    async listUsers({ keyword } = {}) {
       assertDbMethods(db, ['query']);
+      const normalizedKeyword = String(keyword || '').trim().slice(0, 64);
+      const searchPattern = normalizedKeyword ? `%${normalizedKeyword}%` : '';
+      const userQuery = [
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, feishu_open_id, app_access, department_code, totp_enabled, created_at FROM users',
+        normalizedKeyword ? 'WHERE (username LIKE ? OR phone LIKE ?)' : '',
+        'ORDER BY id DESC',
+      ].filter(Boolean).join(' ');
       const rows = await db.query(
-        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users ORDER BY id DESC'
+        userQuery,
+        normalizedKeyword ? [searchPattern, searchPattern] : []
       );
       const users = rows.map(formatUserRow);
       const loginIds = Array.from(new Set(users.map((item) => resolveUserLoginId(item, builtinAccountUsernames)).filter(Boolean)));
@@ -203,7 +233,19 @@ const createAdminCenterUsersService = ({
 
     async createUser({ actor, payload }) {
       assertDbMethods(db, ['run', 'get']);
-      const { username, password, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code } = payload || {};
+      const {
+        username,
+        password,
+        role,
+        is_active,
+        must_change_password,
+        email,
+        phone,
+        wecom_id,
+        feishu_open_id,
+        app_access,
+        department_code,
+      } = payload || {};
       if (!username || !password) throw createHttpError(400, '请输入账号和密码');
 
       const usernameRuleError = validateUsernameFormat(username);
@@ -226,13 +268,26 @@ const createAdminCenterUsersService = ({
       const nextAccess = normalizeAppAccess(app_access, nextRole);
       if (!nextAccess.length) throw createHttpError(400, '请至少选择一个可访问系统');
 
+      const nextWecomId = await assertExternalIdentityAvailable({
+        db,
+        field: 'wecom_id',
+        label: '企业微信 UserId',
+        value: wecom_id,
+      });
+      const nextFeishuOpenId = await assertExternalIdentityAvailable({
+        db,
+        field: 'feishu_open_id',
+        label: '飞书 Open ID',
+        value: feishu_open_id,
+      });
+
       const hash = await hashPassword(password);
       const nextActive = is_active === undefined ? 1 : (Number(is_active) === 1 ? 1 : 0);
       const nextMustChangePassword = Number(must_change_password) === 1 ? 1 : 0;
       let info;
       try {
         info = await db.run(
-          'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, app_access, department_code, must_change_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO users (username, password_hash, role, is_active, email, phone, wecom_id, feishu_open_id, app_access, department_code, must_change_password) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
           [
             String(username).trim(),
             hash,
@@ -240,7 +295,8 @@ const createAdminCenterUsersService = ({
             nextActive,
             email || null,
             phone || null,
-            wecom_id || null,
+            nextWecomId,
+            nextFeishuOpenId,
             JSON.stringify(nextAccess),
             nextDepartmentCode,
             nextMustChangePassword,
@@ -252,7 +308,7 @@ const createAdminCenterUsersService = ({
       }
 
       const row = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, feishu_open_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [info.insertId]
       ));
       await logOperation({
@@ -267,7 +323,7 @@ const createAdminCenterUsersService = ({
 
     async updateUser({ actor, targetId, payload }) {
       assertDbMethods(db, ['get', 'run']);
-      const { password, role, is_active, email, phone, wecom_id, app_access, department_code } = payload || {};
+      const { password, role, is_active, email, phone, wecom_id, feishu_open_id, app_access, department_code } = payload || {};
       if (
         !password &&
         !role &&
@@ -275,6 +331,7 @@ const createAdminCenterUsersService = ({
         email === undefined &&
         phone === undefined &&
         wecom_id === undefined &&
+        feishu_open_id === undefined &&
         app_access === undefined &&
         department_code === undefined
       ) {
@@ -289,7 +346,7 @@ const createAdminCenterUsersService = ({
         if (phoneRuleError) throw createHttpError(400, phoneRuleError);
       }
       const before = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, feishu_open_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       if (!before) throw createHttpError(404, '用户不存在');
@@ -315,7 +372,24 @@ const createAdminCenterUsersService = ({
         await db.run('UPDATE users SET phone = ? WHERE id = ?', [phone || null, targetId]);
       }
       if (wecom_id !== undefined) {
-        await db.run('UPDATE users SET wecom_id = ? WHERE id = ?', [wecom_id || null, targetId]);
+        const nextWecomId = await assertExternalIdentityAvailable({
+          db,
+          field: 'wecom_id',
+          label: '企业微信 UserId',
+          value: wecom_id,
+          targetId,
+        });
+        await db.run('UPDATE users SET wecom_id = ? WHERE id = ?', [nextWecomId, targetId]);
+      }
+      if (feishu_open_id !== undefined) {
+        const nextFeishuOpenId = await assertExternalIdentityAvailable({
+          db,
+          field: 'feishu_open_id',
+          label: '飞书 Open ID',
+          value: feishu_open_id,
+          targetId,
+        });
+        await db.run('UPDATE users SET feishu_open_id = ? WHERE id = ?', [nextFeishuOpenId, targetId]);
       }
       if (department_code !== undefined) {
         await db.run('UPDATE users SET department_code = ? WHERE id = ?', [normalizeDepartmentCode(department_code), targetId]);
@@ -343,7 +417,7 @@ const createAdminCenterUsersService = ({
         await db.run('UPDATE users SET app_access = ? WHERE id = ?', [JSON.stringify(nextAccess), targetId]);
       }
       const row = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, feishu_open_id, app_access, department_code, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       let actionType = 'UPDATE';
@@ -395,7 +469,7 @@ const createAdminCenterUsersService = ({
       assertDbMethods(db, ['get', 'run']);
       if (String(targetId) === String(actor?.id)) throw createHttpError(400, '不能删除自己');
       const before = formatUserRow(await db.get(
-        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
+        'SELECT id, username, role, is_active, must_change_password, email, phone, wecom_id, feishu_open_id, app_access, totp_enabled, created_at FROM users WHERE id = ?',
         [targetId]
       ));
       if (!before) throw createHttpError(404, '用户不存在');

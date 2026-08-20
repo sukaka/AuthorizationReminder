@@ -13,4 +13,8 @@ test('admin center edit modal is centered in viewport', () => {
   assert.match(source, /\.modal-panel\{[^}]*width:min\(1180px,100%\)/);
   assert.match(source, /\.modal-panel\{[^}]*max-height:calc\(100vh - 48px\)/);
   assert.match(source, /\.modal-panel\{[^}]*margin:0/);
+  assert.match(
+    source,
+    /function openModal\(modalId\) \{[\s\S]*?document\.body\.appendChild\(modal\);[\s\S]*?modal\.hidden = false;/
+  );
 });

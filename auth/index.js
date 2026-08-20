@@ -30,6 +30,14 @@ const {
   mysqlDatetimeToUtcMs,
 } = require('./session-security');
 const {
+  buildSocialLoginAuthorizationUrl,
+  createSocialLoginState,
+  exchangeSocialAuthorizationCode,
+  getEnabledSocialLoginProviders,
+  readSocialLoginConfig,
+  verifySocialLoginState,
+} = require('./social-login');
+const {
   isOriginAllowedForRequest,
   normalizeOrigin,
 } = require('../server/cors-origin');
@@ -112,6 +120,10 @@ const AUTH_COOKIE_SECURE = process.env.AUTH_COOKIE_SECURE === 'true';
 const AUTH_COOKIE_SAMESITE = String(process.env.AUTH_COOKIE_SAMESITE || 'lax').trim().toLowerCase() || 'lax';
 const AUTH_CSRF_COOKIE_NAME = String(process.env.AUTH_CSRF_COOKIE_NAME || 'auth_csrf_token').trim() || 'auth_csrf_token';
 const AUTH_CSRF_COOKIE_SECURE = process.env.CSRF_SECURE === 'true';
+const SOCIAL_LOGIN_CONFIG = readSocialLoginConfig(process.env);
+const SOCIAL_LOGIN_STATE_COOKIE_PREFIX = 'juxin_sso_state_';
+const SOCIAL_LOGIN_MFA_COOKIE_NAME = 'juxin_sso_mfa';
+const SOCIAL_LOGIN_MFA_TTL_SECONDS = 10 * 60;
 const CONFIG_SECRET_KEY = process.env.CONFIG_SECRET_KEY || '';
 const SECRET_MASK = '******';
 const BUILTIN_ACCOUNT_DEFAULT_PASSWORD = process.env.BUILTIN_ACCOUNT_DEFAULT_PASSWORD || '123456';
@@ -789,6 +801,122 @@ const clearCsrfCookie = (res) => {
   res.clearCookie(AUTH_CSRF_COOKIE_NAME, buildCsrfCookieOptions());
 };
 
+const isSocialLoginCookieSecure = (() => {
+  try {
+    return AUTH_COOKIE_SECURE || new URL(SOCIAL_LOGIN_CONFIG.publicOrigin).protocol === 'https:';
+  } catch (_err) {
+    return AUTH_COOKIE_SECURE;
+  }
+})();
+
+const getSocialLoginStateCookieName = (provider) =>
+  `${SOCIAL_LOGIN_STATE_COOKIE_PREFIX}${String(provider || '').trim().toLowerCase()}`;
+
+const getSocialLoginStateCookiePath = (provider) =>
+  `/api/auth/sso/${String(provider || '').trim().toLowerCase()}/callback`;
+
+const buildSocialLoginStateCookieOptions = (provider) => ({
+  httpOnly: true,
+  secure: isSocialLoginCookieSecure,
+  sameSite: 'lax',
+  path: getSocialLoginStateCookiePath(provider),
+  maxAge: SOCIAL_LOGIN_CONFIG.stateTtlSeconds * 1000,
+});
+
+const clearSocialLoginStateCookie = (res, provider) => {
+  res.clearCookie(getSocialLoginStateCookieName(provider), {
+    httpOnly: true,
+    secure: isSocialLoginCookieSecure,
+    sameSite: 'lax',
+    path: getSocialLoginStateCookiePath(provider),
+  });
+};
+
+const buildSocialLoginMfaCookieOptions = () => ({
+  httpOnly: true,
+  secure: isSocialLoginCookieSecure,
+  sameSite: 'lax',
+  path: '/api/auth/sso/pending',
+  maxAge: SOCIAL_LOGIN_MFA_TTL_SECONDS * 1000,
+});
+
+const clearSocialLoginMfaCookie = (res) => {
+  res.clearCookie(SOCIAL_LOGIN_MFA_COOKIE_NAME, {
+    httpOnly: true,
+    secure: isSocialLoginCookieSecure,
+    sameSite: 'lax',
+    path: '/api/auth/sso/pending',
+  });
+};
+
+const normalizeSocialLoginContext = (source = {}) => {
+  const requestedSystem = String(source.system || '').trim().toLowerCase();
+  return {
+    system: SYSTEM_ACCESS_KEYS.includes(requestedSystem) ? requestedSystem : '',
+    mode: String(source.mode || '').trim().toLowerCase() === 'switch' ? 'switch' : '',
+  };
+};
+
+const buildSocialLoginPortalRedirect = ({ context = {}, status, errorCode = '' } = {}) => {
+  const normalizedContext = normalizeSocialLoginContext(context);
+  const params = new URLSearchParams();
+  if (normalizedContext.system) params.set('system', normalizedContext.system);
+  if (normalizedContext.mode) params.set('mode', normalizedContext.mode);
+  params.set('sso', String(status || 'error'));
+  if (errorCode) params.set('sso_error', String(errorCode).slice(0, 64));
+  return `/portal?${params.toString()}`;
+};
+
+const createSocialLoginMfaCookieToken = ({ mfaToken, provider }) =>
+  jwt.sign(
+    {
+      type: 'social_login_mfa',
+      token: String(mfaToken || ''),
+      provider: String(provider || ''),
+    },
+    JWT_SECRET,
+    { algorithm: 'HS256', expiresIn: SOCIAL_LOGIN_MFA_TTL_SECONDS }
+  );
+
+const verifySocialLoginMfaCookieToken = (cookieToken) => {
+  try {
+    const payload = jwt.verify(cookieToken, JWT_SECRET, { algorithms: ['HS256'] });
+    if (payload?.type !== 'social_login_mfa' || !payload?.token) throw new Error('invalid pending login');
+    return {
+      mfaToken: String(payload.token),
+      provider: String(payload.provider || ''),
+    };
+  } catch (_err) {
+    return null;
+  }
+};
+
+const SOCIAL_LOGIN_ERROR_CODES = new Set([
+  'provider_disabled',
+  'authorization_cancelled',
+  'invalid_state',
+  'invalid_code',
+  'provider_unavailable',
+  'identity_unavailable',
+  'identity_not_bound',
+  'identity_ambiguous',
+  'account_disabled',
+  'ip_restricted',
+  'mfa_unavailable',
+  'pending_expired',
+]);
+
+const normalizeSocialLoginErrorCode = (error) => {
+  const code = String(error?.code || '').trim().toLowerCase();
+  return SOCIAL_LOGIN_ERROR_CODES.has(code) ? code : 'provider_unavailable';
+};
+
+const createSocialLoginError = (code) => {
+  const error = new Error('social login failed');
+  error.code = code;
+  return error;
+};
+
 const authMiddleware = async (req, res, next) => {
   if (
     req.path === '/auth/login' ||
@@ -796,6 +924,7 @@ const authMiddleware = async (req, res, next) => {
     req.path === '/auth/captcha' ||
     req.path === '/auth/mfa/send' ||
     req.path === '/auth/mfa/verify' ||
+    req.path.startsWith('/auth/sso/') ||
     req.path === '/health'
   ) {
     return next();
@@ -1783,6 +1912,16 @@ const renderAdminCenterSections = () => ({
           <button id="adminUsersReloadBtn" type="button" class="ghost-btn">刷新列表</button>
         </div>
       </div>
+      <form id="adminUsersSearchForm" class="user-search-bar" role="search">
+        <label class="form-label user-search-field">
+          搜索用户
+          <input id="adminUsersSearchInput" type="search" class="form-control" placeholder="按用户名或手机号搜索" maxlength="64" autocomplete="off" />
+        </label>
+        <div class="form-actions user-search-actions">
+          <button class="primary-btn" type="submit">搜索</button>
+          <button id="adminUsersSearchResetBtn" class="ghost-btn" type="button">重置</button>
+        </div>
+      </form>
       <form id="adminCreateUserForm" class="form-grid user-create-grid">
         <label class="form-label">
           账号
@@ -1797,8 +1936,12 @@ const renderAdminCenterSections = () => ({
           <input name="phone" class="form-control" placeholder="13800000000" />
         </label>
         <label class="form-label">
-          企业微信 ID
-          <input name="wecom_id" class="form-control" placeholder="wecom-id" />
+          企业微信 UserId（扫码登录 / 二次验证）
+          <input name="wecom_id" class="form-control" placeholder="例如：zhangsan" />
+        </label>
+        <label class="form-label">
+          飞书 Open ID（扫码登录）
+          <input name="feishu_open_id" class="form-control" placeholder="例如：ou_xxxxxxxxxxxxxxxx" />
         </label>
         <label class="form-label">
           初始密码
@@ -1864,7 +2007,7 @@ const renderAdminCenterSections = () => ({
               <th>状态</th>
               <th>锁定状态</th>
               <th>可访问系统</th>
-              <th>二次验证</th>
+              <th>认证方式</th>
               <th>创建时间</th>
               <th>操作</th>
             </tr>
@@ -1898,8 +2041,12 @@ const renderAdminCenterSections = () => ({
               <input id="adminEditPhone" class="form-control" placeholder="例如：13800000000" />
             </label>
             <label class="form-label">
-              企业微信UserID（用于二次验证）
+              企业微信 UserId（扫码登录 / 二次验证）
               <input id="adminEditWecomId" class="form-control" placeholder="例如：zhangsan" />
+            </label>
+            <label class="form-label">
+              飞书 Open ID（扫码登录）
+              <input id="adminEditFeishuOpenId" class="form-control" placeholder="例如：ou_xxxxxxxxxxxxxxxx" />
             </label>
             <label class="form-label">
               密码
@@ -2260,6 +2407,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     *{box-sizing:border-box}
     html,body{margin:0;padding:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;background:radial-gradient(circle at top right,rgba(37,99,235,.12),transparent 45%),radial-gradient(circle at 20% 20%,rgba(14,165,233,.12),transparent 40%),linear-gradient(135deg,#f8fafc 0%,#eef2ff 38%,#f0fdf4 100%);color:var(--ink)}
     body{min-height:100vh}
+    body.modal-open{overflow:hidden}
     button,input,select,textarea{font:inherit}
     .shell{max-width:1760px;margin:0 auto;padding:24px clamp(14px,2vw,30px) 90px;display:grid;grid-template-columns:236px minmax(0,1fr);gap:clamp(16px,1.8vw,26px)}
     .content{display:flex;flex-direction:column;gap:24px;min-width:0}
@@ -2311,6 +2459,9 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
     .import-btn input[type='file']{position:absolute;inset:0;opacity:0;cursor:pointer}
     .import-btn.disabled{opacity:.55;pointer-events:none}
     .import-copy{display:grid;gap:4px;min-width:0;padding-top:4px}
+    .user-search-bar{display:flex;align-items:flex-end;gap:12px;margin-bottom:18px;padding:16px;border-radius:16px;border:1px solid rgba(148,163,184,.25);background:rgba(248,250,252,.82);position:relative;z-index:1}
+    .user-search-field{flex:1;min-width:240px}
+    .user-search-actions{flex:0 0 auto}
     .access-pill-grid{display:flex;flex-wrap:wrap;gap:14px;margin-top:8px}
     .access-pill{display:inline-flex;align-items:center;gap:10px;padding:12px 16px;border-radius:999px;border:1px solid rgba(96,165,250,.45);background:rgba(255,255,255,.92);box-shadow:0 8px 18px rgba(59,130,246,.08);min-height:48px}
     .access-pill input{width:18px;height:18px;margin:0}
@@ -3250,7 +3401,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       updateStatCard('primaryStatValue', list.length);
       updateStatCard('secondaryStatValue', list.filter((row) => row.lock_status === 'locked').length);
       if (!list.length) {
-        body.innerHTML = '<tr><td colspan="11" class="empty">当前没有用户数据</td></tr>';
+        const keyword = String(document.getElementById('adminUsersSearchInput')?.value || '').trim();
+        body.innerHTML = '<tr><td colspan="11" class="empty">' + (keyword ? '没有找到匹配的用户' : '当前没有用户数据') + '</td></tr>';
         return;
       }
       body.innerHTML = list.map((row, index) => {
@@ -3267,6 +3419,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         if (row.email) factorList.push('邮箱');
         if (row.phone) factorList.push('短信');
         if (row.wecom_id) factorList.push('企业微信');
+        if (row.feishu_open_id) factorList.push('飞书登录');
         if (Number(row.totp_enabled) === 1) factorList.push('谷歌认证');
         const factorText = factorList.length ? escapeHtml(Array.from(new Set(factorList)).join('、')) : '-';
         const username = escapeHtml(row.username || '-');
@@ -3317,12 +3470,19 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       const modal = document.getElementById(modalId);
       if (!modal) return;
       modal.hidden = true;
+      if (!document.querySelector('.modal-shell:not([hidden])')) {
+        document.body.classList.remove('modal-open');
+      }
     }
 
     function openModal(modalId) {
       const modal = document.getElementById(modalId);
       if (!modal) return;
+      if (modal.parentElement !== document.body) {
+        document.body.appendChild(modal);
+      }
       modal.hidden = false;
+      document.body.classList.add('modal-open');
     }
 
     function collectCreateUserPayload(form) {
@@ -3340,6 +3500,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         email: String(formData.get('email') || '').trim(),
         phone: String(formData.get('phone') || '').trim(),
         wecom_id: String(formData.get('wecom_id') || '').trim(),
+        feishu_open_id: String(formData.get('feishu_open_id') || '').trim(),
         app_access: appAccess,
       };
     }
@@ -3373,6 +3534,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       document.getElementById('adminEditEmail').value = String(row.email || '');
       document.getElementById('adminEditPhone').value = String(row.phone || '');
       document.getElementById('adminEditWecomId').value = String(row.wecom_id || '');
+      document.getElementById('adminEditFeishuOpenId').value = String(row.feishu_open_id || '');
       document.getElementById('adminEditPassword').value = '';
       document.getElementById('adminEditRole').value = String(row.role || 'user');
       document.getElementById('adminEditDepartmentCode').innerHTML = renderDepartmentOptions(row.department_code);
@@ -3397,6 +3559,7 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         email: String(document.getElementById('adminEditEmail')?.value || '').trim(),
         phone: String(document.getElementById('adminEditPhone')?.value || '').trim(),
         wecom_id: String(document.getElementById('adminEditWecomId')?.value || '').trim(),
+        feishu_open_id: String(document.getElementById('adminEditFeishuOpenId')?.value || '').trim(),
         password: String(document.getElementById('adminEditPassword')?.value || '').trim(),
         role,
         department_code: String(document.getElementById('adminEditDepartmentCode')?.value || '').trim().toUpperCase(),
@@ -3734,15 +3897,22 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
       return normalizeSecurityConfig(next);
     }
 
-    async function loadAdminUsers() {
-      setHint('adminUsersNotice', '正在刷新用户列表...');
+    async function loadAdminUsers(event) {
+      event?.preventDefault?.();
+      if (event?.type === 'submit') adminSelectedUserIds = [];
+      const keyword = String(document.getElementById('adminUsersSearchInput')?.value || '').trim();
+      const params = new URLSearchParams();
+      if (keyword) params.set('keyword', keyword);
+      const queryString = params.toString();
+      const listUrl = queryString ? (centerApi.usersList + '?' + queryString) : centerApi.usersList;
+      setHint('adminUsersNotice', keyword ? '正在搜索用户...' : '正在刷新用户列表...');
       try {
-        const rows = await requestJson(centerApi.usersList);
+        const rows = await requestJson(listUrl);
         renderUsers(rows);
         adminSelectedUserIds = normalizeAdminSelectedUserIds(adminSelectedUserIds);
         syncAdminUserSelectionUi();
         renderDepartmentAdminPicker(readSelectedDepartmentAdminIds());
-        setHint('adminUsersNotice', '用户列表已更新');
+        setHint('adminUsersNotice', keyword ? ('找到 ' + rows.length + ' 个匹配用户') : '用户列表已更新');
       } catch (error) {
         renderUsers([]);
         adminSelectedUserIds = [];
@@ -3750,6 +3920,13 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
         renderDepartmentAdminPicker([]);
         setHint('adminUsersNotice', error.message || '加载用户列表失败', true);
       }
+    }
+
+    function resetAdminUsersSearch() {
+      const input = document.getElementById('adminUsersSearchInput');
+      if (input) input.value = '';
+      adminSelectedUserIds = [];
+      loadAdminUsers();
     }
 
     async function onAdminUsersAction(event) {
@@ -4325,6 +4502,8 @@ const renderDedicatedCenterPage = ({ nonce, config }) => {
           });
         });
         document.getElementById('adminUsersReloadBtn')?.addEventListener('click', loadAdminUsers);
+        document.getElementById('adminUsersSearchForm')?.addEventListener('submit', loadAdminUsers);
+        document.getElementById('adminUsersSearchResetBtn')?.addEventListener('click', resetAdminUsersSearch);
         document.getElementById('adminUsersBulkDeleteBtn')?.addEventListener('click', onAdminUsersBulkDelete);
         document.getElementById('adminUsersBulkGrantAiBtn')?.addEventListener('click', () => {
           onAdminUsersBulkUpdate({ app_access_add: ['ai-assistant'] }, '授予 AI 助手权限');
@@ -4515,6 +4694,17 @@ app.get('/portal', async (req, res) => {
   const portalHint = isScaPortal
     ? `使用统一账号登录，登录后进入${SCA_SYSTEM_DISPLAY_NAME}。`
     : '统一登录成功后，请先选择要进入的系统；管理员可进入后台，普通用户进入自己有权限的系统。';
+  const socialLoginProviders = getEnabledSocialLoginProviders(SOCIAL_LOGIN_CONFIG);
+  const socialLoginContext = normalizeSocialLoginContext(req.query);
+  const socialLoginContextParams = new URLSearchParams();
+  if (socialLoginContext.system) socialLoginContextParams.set('system', socialLoginContext.system);
+  if (socialLoginContext.mode) socialLoginContextParams.set('mode', socialLoginContext.mode);
+  const socialLoginContextQuery = socialLoginContextParams.toString();
+  const socialLoginButtonsHtml = socialLoginProviders.map((provider) => {
+    const label = provider.key === 'wecom' ? '企业微信扫码登录' : '飞书扫码登录';
+    const href = `/api/auth/sso/${provider.key}/start${socialLoginContextQuery ? `?${socialLoginContextQuery}` : ''}`;
+    return `<a class="social-login-button social-login-${provider.key}" href="${href}">${label}</a>`;
+  }).join('');
   res.send(`<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -4558,6 +4748,14 @@ app.get('/portal', async (req, res) => {
     .hint{color:#64748b;margin-top:8px;font-size:13px}
     .login-actions{margin-top:12px;display:flex;justify-content:center}
     .login-actions .primary{min-width:120px}
+    .social-login-divider{display:flex;align-items:center;gap:12px;margin:18px 0 12px;color:#94a3b8;font-size:12px}
+    .social-login-divider::before,.social-login-divider::after{content:'';height:1px;flex:1;background:rgba(148,163,184,.32)}
+    .social-login-actions{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .social-login-button{display:flex;align-items:center;justify-content:center;min-height:40px;padding:0 12px;border:1px solid rgba(148,163,184,.4);border-radius:10px;color:#0f172a;text-decoration:none;font-size:14px;font-weight:600;background:#fff}
+    .social-login-button:hover{border-color:#60a5fa;background:#f8fafc}
+    .social-login-wecom{color:#087c4c}
+    .social-login-feishu{color:#245bdb}
+    @media (max-width: 460px){.social-login-actions{grid-template-columns:1fr}}
     #username{width:448px;max-width:100%;box-sizing:border-box}
     .password-wrap{position:relative;width:448px;max-width:100%;box-sizing:border-box}
     .password-wrap input{width:100%;box-sizing:border-box;padding-right:42px}
@@ -4615,6 +4813,7 @@ app.get('/portal', async (req, res) => {
         </div>
         <div class="login-actions"><button id="loginBtn" class="primary" type="submit" disabled>登录</button></div>
       </form>
+      ${socialLoginButtonsHtml ? `<div class="social-login-divider">或使用扫码登录</div><div class="social-login-actions">${socialLoginButtonsHtml}</div>` : ''}
       <div id="loginError" class="error"></div>
       <div id="captchaHint" class="hint">正在加载验证码...</div>
     </div>
@@ -4679,6 +4878,8 @@ app.get('/portal', async (req, res) => {
     let loginSubmitting = false;
     const portalParams = new URLSearchParams(window.location.search);
     const portalMode = String(portalParams.get('mode') || '').toLowerCase();
+    const socialLoginStatus = String(portalParams.get('sso') || '').toLowerCase();
+    const socialLoginErrorCode = String(portalParams.get('sso_error') || '').toLowerCase();
     const isPortalLogoutRequest = ${isPortalLogoutRequest ? 'true' : 'false'};
     const authPublicOrigin = ${JSON.stringify(String(process.env.AUTH_PUBLIC_URL || '').trim())};
     function buildPortalUrl(options = {}) {
@@ -4719,6 +4920,24 @@ app.get('/portal', async (req, res) => {
       if (payloadError) return payloadError;
       if (response && response.includes('invalid csrf token')) return '安全校验失败，请刷新后重试';
       return String(response || '').replace(/<[^>]*>/g, '').trim() || fallback;
+    }
+
+    function getSocialLoginErrorMessage(code) {
+      const messages = {
+        provider_disabled: '该扫码登录方式尚未配置，请联系系统管理员。',
+        authorization_cancelled: '扫码授权已取消，请重试。',
+        invalid_state: '扫码登录请求已失效，请重新扫码。',
+        invalid_code: '扫码授权码无效，请重新扫码。',
+        provider_unavailable: '扫码登录服务暂时不可用，请稍后重试。',
+        identity_unavailable: '未获取到企业成员身份，请联系系统管理员。',
+        identity_not_bound: '该企业身份尚未绑定统一登录账号，请联系系统管理员。',
+        identity_ambiguous: '该企业身份绑定异常，请联系系统管理员。',
+        account_disabled: '账号已被禁用，请联系系统管理员。',
+        ip_restricted: '当前IP不在允许访问范围内，请联系系统管理员。',
+        mfa_unavailable: '二次验证方式不可用，请联系系统管理员。',
+        pending_expired: '二次验证会话已过期，请重新扫码。',
+      };
+      return messages[String(code || '')] || '扫码登录失败，请稍后重试。';
     }
 
     function hideAllCards() {
@@ -4862,6 +5081,14 @@ app.get('/portal', async (req, res) => {
       }
       if (params.has('logout')) {
         params.delete('logout');
+        changed = true;
+      }
+      if (params.has('sso')) {
+        params.delete('sso');
+        changed = true;
+      }
+      if (params.has('sso_error')) {
+        params.delete('sso_error');
         changed = true;
       }
       if (!changed) return;
@@ -5448,6 +5675,39 @@ app.get('/portal', async (req, res) => {
       if (isPortalLogoutRequest) {
         clearPortalSessionMarker();
       }
+      if (socialLoginStatus === 'mfa') {
+        ensurePortalSessionMarker();
+        try {
+          const response = await fetch('/api/auth/sso/pending', { credentials: 'include' });
+          const text = await response.text();
+          const data = parseJsonSafe(text);
+          if (!response.ok || !data.mfaRequired) {
+            throw new Error(getErrorText({ response: text, data, fallback: '二次验证会话已失效' }));
+          }
+          showMfaLogin(data);
+          return;
+        } catch (error) {
+          clearPortalSessionMarker();
+          hideAllCards();
+          if (loginCard) loginCard.style.display = 'block';
+          await loadCsrf();
+          await loadCaptcha();
+          setError(error.message || '二次验证会话已失效，请重新扫码。');
+          return;
+        }
+      }
+      if (socialLoginStatus === 'complete') {
+        ensurePortalSessionMarker();
+      }
+      if (socialLoginStatus === 'error') {
+        clearPortalSessionMarker();
+        hideAllCards();
+        if (loginCard) loginCard.style.display = 'block';
+        await loadCsrf();
+        await loadCaptcha();
+        setError(getSocialLoginErrorMessage(socialLoginErrorCode));
+        return;
+      }
       if (!getPortalSessionMarker()) {
         hideAllCards();
         if (loginCard) loginCard.style.display = 'block';
@@ -5723,7 +5983,9 @@ app.get('/api/admin-center/users', async (req, res) => {
     return res.status(403).json({ error: '无权限访问管理后台' });
   }
   try {
-    const rows = await adminCenterUsersService.listUsers();
+    const rows = await adminCenterUsersService.listUsers({
+      keyword: req.query?.keyword,
+    });
     return res.json(rows);
   } catch (err) {
     return sendApiError(res, err, '获取用户列表失败');
@@ -6417,6 +6679,216 @@ app.get('/api/auth/captcha', async (req, res) => {
   res.json({ enabled: true, token, svg, svg_base64: svgBase64 });
 });
 
+app.get('/api/auth/sso/:provider/start', (req, res) => {
+  const provider = String(req.params.provider || '').trim().toLowerCase();
+  const context = normalizeSocialLoginContext(req.query);
+  res.set('Cache-Control', 'no-store');
+  clearSocialLoginMfaCookie(res);
+  try {
+    const { state, cookieToken } = createSocialLoginState({
+      provider,
+      signingSecret: JWT_SECRET,
+      ttlSeconds: SOCIAL_LOGIN_CONFIG.stateTtlSeconds,
+      context,
+    });
+    const authorizationUrl = buildSocialLoginAuthorizationUrl({
+      provider,
+      config: SOCIAL_LOGIN_CONFIG,
+      state,
+    });
+    res.cookie(
+      getSocialLoginStateCookieName(provider),
+      cookieToken,
+      buildSocialLoginStateCookieOptions(provider)
+    );
+    return res.redirect(302, authorizationUrl);
+  } catch (error) {
+    return res.redirect(303, buildSocialLoginPortalRedirect({
+      context,
+      status: 'error',
+      errorCode: normalizeSocialLoginErrorCode(error),
+    }));
+  }
+});
+
+app.get('/api/auth/sso/:provider/callback', async (req, res) => {
+  const provider = String(req.params.provider || '').trim().toLowerCase();
+  const stateCookie = readCookieValue(req, getSocialLoginStateCookieName(provider));
+  const requestIp = getRequestIp(req);
+  let context = {};
+  let user = null;
+  res.set('Cache-Control', 'no-store');
+  clearSocialLoginStateCookie(res, provider);
+  clearSocialLoginMfaCookie(res);
+
+  try {
+    context = verifySocialLoginState({
+      provider,
+      state: req.query.state,
+      cookieToken: stateCookie,
+      signingSecret: JWT_SECRET,
+    });
+    if (req.query.error || req.query.error_code || req.query.errcode) {
+      throw createSocialLoginError('authorization_cancelled');
+    }
+
+    const identity = await exchangeSocialAuthorizationCode({
+      provider,
+      config: SOCIAL_LOGIN_CONFIG,
+      code: req.query.code,
+    });
+    const identityColumn = provider === 'wecom' ? 'wecom_id' : 'feishu_open_id';
+    const matches = await db.query(
+      `SELECT * FROM users WHERE ${identityColumn} = ? LIMIT 2`,
+      [identity.subject]
+    );
+    if (matches.length !== 1) {
+      throw createSocialLoginError(matches.length > 1 ? 'identity_ambiguous' : 'identity_not_bound');
+    }
+    [user] = matches;
+
+    if (Number(user.is_active) !== 1) {
+      throw createSocialLoginError('account_disabled');
+    }
+    const security = await getSecurityConfig();
+    const ipCheck = checkRoleIpAccess({
+      role: user.role,
+      ip: requestIp,
+      securityConfig: security,
+    });
+    if (!ipCheck.allowed) {
+      throw createSocialLoginError('ip_restricted');
+    }
+
+    const mfaStatus = resolveUserMfaStatus({ user, securityConfig: security });
+    if (mfaStatus.setupRequired) {
+      const { token } = await createUserSession({
+        user,
+        securityConfig: security,
+        requestIp,
+        userAgent: req.headers['user-agent'],
+      });
+      setAuthCookie(res, token);
+      await logOperation({
+        user,
+        action: 'SOCIAL_LOGIN_MFA_SETUP_REQUIRED',
+        entity: 'auth',
+        entityId: 0,
+        requestIp,
+        afterData: {
+          provider,
+          username: user.username,
+          role: user.role,
+          desired_methods: mfaStatus.desiredMethods,
+          available_methods: mfaStatus.availableMethods,
+        },
+      });
+      return res.redirect(303, buildSocialLoginPortalRedirect({ context, status: 'complete' }));
+    }
+
+    if (mfaStatus.enabled) {
+      const methods = mfaStatus.effectiveMethods.filter(
+        (method) => provider !== 'wecom' || method !== 'wecom'
+      );
+      if (!mfaStatus.desiredMethods.length || methods.length === 0) {
+        throw createSocialLoginError('mfa_unavailable');
+      }
+      const mfaToken = crypto.randomBytes(24).toString('hex');
+      const expiresAt = toMysqlDatetime(new Date(Date.now() + SOCIAL_LOGIN_MFA_TTL_SECONDS * 1000));
+      await db.run(
+        `INSERT INTO auth_mfa_sessions (token, user_id, username, methods_json, expires_at)
+         VALUES (?, ?, ?, ?, ?)`,
+        [mfaToken, user.id, user.username, JSON.stringify(methods), expiresAt]
+      );
+      res.cookie(
+        SOCIAL_LOGIN_MFA_COOKIE_NAME,
+        createSocialLoginMfaCookieToken({ mfaToken, provider }),
+        buildSocialLoginMfaCookieOptions()
+      );
+      await logOperation({
+        user,
+        action: 'SOCIAL_LOGIN_MFA_REQUIRED',
+        entity: 'auth',
+        entityId: 0,
+        requestIp,
+        afterData: { provider, username: user.username, role: user.role, methods },
+      });
+      return res.redirect(303, buildSocialLoginPortalRedirect({ context, status: 'mfa' }));
+    }
+
+    const { token } = await createUserSession({
+      user,
+      securityConfig: security,
+      requestIp,
+      userAgent: req.headers['user-agent'],
+    });
+    setAuthCookie(res, token);
+    await logOperation({
+      user,
+      action: 'SOCIAL_LOGIN_SUCCESS',
+      entity: 'auth',
+      entityId: 0,
+      requestIp,
+      afterData: { provider, username: user.username, role: user.role, status: 'success' },
+    });
+    return res.redirect(303, buildSocialLoginPortalRedirect({ context, status: 'complete' }));
+  } catch (error) {
+    const errorCode = normalizeSocialLoginErrorCode(error);
+    await logOperation({
+      user: user || { id: 0, username: 'social-login', role: 'unknown' },
+      action: 'SOCIAL_LOGIN_FAILED',
+      entity: 'auth',
+      entityId: 0,
+      requestIp,
+      afterData: { provider, reason: errorCode, status: 'failed' },
+    });
+    return res.redirect(303, buildSocialLoginPortalRedirect({
+      context,
+      status: 'error',
+      errorCode,
+    }));
+  }
+});
+
+app.get('/api/auth/sso/pending', async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const pending = verifySocialLoginMfaCookieToken(
+    readCookieValue(req, SOCIAL_LOGIN_MFA_COOKIE_NAME)
+  );
+  clearSocialLoginMfaCookie(res);
+  if (!pending || !['wecom', 'feishu'].includes(pending.provider)) {
+    return res.status(400).json({ error: '二次验证会话已过期，请重新扫码', code: 'pending_expired' });
+  }
+
+  const row = await db.get('SELECT * FROM auth_mfa_sessions WHERE token = ?', [pending.mfaToken]);
+  if (!row || mysqlDatetimeToUtcMs(row.expires_at) <= Date.now()) {
+    if (row) await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [pending.mfaToken]);
+    return res.status(400).json({ error: '二次验证会话已过期，请重新扫码', code: 'pending_expired' });
+  }
+  const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
+  if (!user || Number(user.is_active) !== 1) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [pending.mfaToken]);
+    return res.status(400).json({ error: '账号已失效，请重新登录', code: 'account_disabled' });
+  }
+  let methods = [];
+  try {
+    methods = JSON.parse(row.methods_json || '[]');
+  } catch (_err) {
+    methods = [];
+  }
+  methods = methods.filter((method) => MFA_METHODS.includes(method));
+  if (!methods.length) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [pending.mfaToken]);
+    return res.status(400).json({ error: '二次验证方式不可用，请重新登录', code: 'mfa_unavailable' });
+  }
+  return res.json({
+    mfaRequired: true,
+    mfaToken: pending.mfaToken,
+    methods,
+    user: { id: user.id, username: user.username, role: user.role },
+  });
+});
+
 app.post('/api/auth/login', async (req, res) => {
   const { username, password, captchaToken, captcha } = req.body || {};
   const ip = getRequestIp(req);
@@ -6663,7 +7135,10 @@ app.post('/api/auth/mfa/send', async (req, res) => {
   }
 
   const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
-  if (!user) return res.status(400).json({ error: '用户不存在' });
+  if (!user || Number(user.is_active) !== 1) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
+    return res.status(400).json({ error: '用户不存在或账号已失效' });
+  }
 
   const security = await getSecurityConfig();
   const code = randomDigits(6);
@@ -6750,7 +7225,10 @@ app.post('/api/auth/mfa/verify', async (req, res) => {
   if (!methods.includes(method)) return res.status(400).json({ error: '不支持的验证方式' });
 
   const user = await db.get('SELECT * FROM users WHERE id = ?', [row.user_id]);
-  if (!user) return res.status(400).json({ error: '用户不存在' });
+  if (!user || Number(user.is_active) !== 1) {
+    await db.run('DELETE FROM auth_mfa_sessions WHERE token = ?', [mfaToken]);
+    return res.status(400).json({ error: '用户不存在或账号已失效' });
+  }
   const security = await getSecurityConfig();
   const ipCheck = checkRoleIpAccess({
     role: user.role,

@@ -101,6 +101,30 @@ test('listUsers merges lock state into formatted payload', async () => {
   assert.equal(queries.length, 2);
 });
 
+test('listUsers filters users by username or phone with a parameterized keyword', async () => {
+  const queries = [];
+  const service = createAdminCenterUsersService({
+    db: {
+      async query(sql, params = []) {
+        queries.push({ sql, params });
+        if (sql.includes('FROM users')) {
+          return [
+            { id: 8, username: 'alice', role: 'user', is_active: 1, email: '', phone: '13900000000', wecom_id: '', app_access: '[]', department_code: '', totp_enabled: 0, created_at: '2026-03-14 09:00:00' },
+          ];
+        }
+        if (sql.includes('FROM auth_login_attempts')) return [];
+        throw new Error(`unexpected query: ${sql}`);
+      },
+    },
+  });
+
+  const rows = await service.listUsers({ keyword: '  ali  ' });
+
+  assert.equal(rows.length, 1);
+  assert.match(queries[0].sql, /WHERE \(username LIKE \? OR phone LIKE \?\)/);
+  assert.deepEqual(queries[0].params, ['%ali%', '%ali%']);
+});
+
 test('createUser applies normalized role and dedicated center defaults', async () => {
   const operations = [];
   const runs = [];
@@ -112,6 +136,9 @@ test('createUser applies normalized role and dedicated center defaults', async (
         throw new Error(`unexpected run: ${sql}`);
       },
       async get(sql, params = []) {
+        if (sql.includes('FROM users WHERE wecom_id = ?') || sql.includes('FROM users WHERE feishu_open_id = ?')) {
+          return null;
+        }
         if (sql.includes('FROM users WHERE id = ?')) {
           assert.deepEqual(params, [42]);
           return {
@@ -123,6 +150,7 @@ test('createUser applies normalized role and dedicated center defaults', async (
             email: 'boss@example.com',
             phone: '13911112222',
             wecom_id: 'wx-boss',
+            feishu_open_id: 'ou-boss',
             app_access: '["admin-center"]',
             department_code: 'TECH',
             totp_enabled: 0,
@@ -146,6 +174,7 @@ test('createUser applies normalized role and dedicated center defaults', async (
       email: 'boss@example.com',
       phone: '13911112222',
       wecom_id: 'wx-boss',
+      feishu_open_id: 'ou-boss',
       department_code: 'TECH',
     },
   });
@@ -155,9 +184,11 @@ test('createUser applies normalized role and dedicated center defaults', async (
   assert.equal(row.department_code, 'TECH');
   assert.equal(runs.length, 1);
   assert.equal(runs[0].params[1], 'hashed:Strong#1234');
-  assert.deepEqual(JSON.parse(runs[0].params[7]), ['admin-center', 'ai-assistant']);
-  assert.equal(runs[0].params[8], 'TECH');
-  assert.equal(runs[0].params[9], 0);
+  assert.equal(runs[0].params[6], 'wx-boss');
+  assert.equal(runs[0].params[7], 'ou-boss');
+  assert.deepEqual(JSON.parse(runs[0].params[8]), ['admin-center', 'ai-assistant']);
+  assert.equal(runs[0].params[9], 'TECH');
+  assert.equal(runs[0].params[10], 0);
   assert.equal(operations[0].action, 'CREATE');
   assert.equal(operations[0].entity, 'user');
 });
@@ -209,7 +240,7 @@ test('createUser can mark imported users as requiring password change on first l
   });
 
   assert.equal(row.must_change_password, 1);
-  assert.equal(runs[0].params[9], 1);
+  assert.equal(runs[0].params[10], 1);
 });
 
 test('updateUser can toggle active state for regular users', async () => {
@@ -262,6 +293,9 @@ test('updateUser can update profile fields and app access', async () => {
   const service = createAdminCenterUsersService({
     db: {
       async get(sql, params = []) {
+        if (sql.includes('FROM users WHERE wecom_id = ?') || sql.includes('FROM users WHERE feishu_open_id = ?')) {
+          return null;
+        }
         return {
           id: Number(params[0]),
           username: 'editor-user',
@@ -270,6 +304,7 @@ test('updateUser can update profile fields and app access', async () => {
           email: 'old@example.com',
           phone: '13800000000',
           wecom_id: 'old-wecom',
+          feishu_open_id: 'old-feishu',
           app_access: '["faq","tender"]',
           department_code: 'TECH',
           totp_enabled: 0,
@@ -292,6 +327,7 @@ test('updateUser can update profile fields and app access', async () => {
       email: 'next@example.com',
       phone: '13911112222',
       wecom_id: 'next-wecom',
+      feishu_open_id: 'next-feishu',
       app_access: ['faq', 'train-exam'],
       department_code: 'SEC_SERVICE',
     },
@@ -301,8 +337,39 @@ test('updateUser can update profile fields and app access', async () => {
   assert.ok(runs.some((item) => item.sql.includes('SET email = ?') && item.params[0] === 'next@example.com'));
   assert.ok(runs.some((item) => item.sql.includes('SET phone = ?') && item.params[0] === '13911112222'));
   assert.ok(runs.some((item) => item.sql.includes('SET wecom_id = ?') && item.params[0] === 'next-wecom'));
+  assert.ok(runs.some((item) => item.sql.includes('SET feishu_open_id = ?') && item.params[0] === 'next-feishu'));
   assert.ok(runs.some((item) => item.sql.includes('SET app_access = ?') && JSON.parse(item.params[0])[1] === 'train-exam'));
   assert.ok(runs.some((item) => item.sql.includes('SET department_code = ?') && item.params[0] === 'SEC_SERVICE'));
+});
+
+test('createUser rejects an external identity that is already bound to another user', async () => {
+  const service = createAdminCenterUsersService({
+    db: {
+      async get(sql) {
+        if (sql.includes('FROM users WHERE feishu_open_id = ?')) return { id: 7 };
+        return null;
+      },
+      async run() {
+        throw new Error('insert must not run for a duplicate external identity');
+      },
+    },
+    hashPassword: async (password) => `hashed:${password}`,
+    getSecurityConfig: async () => ({ passwordPolicy: DEFAULT_POLICY }),
+  });
+
+  await assert.rejects(
+    service.createUser({
+      actor: { id: 1, username: 'sysadmin', role: 'sysadmin' },
+      payload: {
+        username: 'duplicate-feishu',
+        password: 'Strong#1234',
+        role: 'user',
+        app_access: ['reminder'],
+        feishu_open_id: 'ou-already-bound',
+      },
+    }),
+    (error) => error?.statusCode === 400 && error?.message === '飞书 Open ID 已绑定其他账号'
+  );
 });
 
 test('updateUser allows builtin account role changes while keeping access normalized', async () => {
