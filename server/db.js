@@ -228,6 +228,7 @@ const init = async () => {
     email VARCHAR(255),
     phone VARCHAR(64),
     wecom_id VARCHAR(255),
+    feishu_open_id VARCHAR(255),
     totp_secret VARCHAR(128),
     totp_enabled TINYINT NOT NULL DEFAULT 0,
     mfa_enabled TINYINT NOT NULL DEFAULT 0,
@@ -241,6 +242,17 @@ const init = async () => {
   await addColumnIfMissing('users', 'is_active', 'is_active TINYINT NOT NULL DEFAULT 1');
   await addColumnIfMissing('users', 'must_change_password', 'must_change_password TINYINT NOT NULL DEFAULT 0');
   await addColumnIfMissing('users', 'department_code', 'department_code VARCHAR(32) NULL');
+  await addColumnIfMissing('users', 'feishu_open_id', 'feishu_open_id VARCHAR(255)');
+  await addIndexIfMissing(
+    'users',
+    'idx_users_wecom_id',
+    'CREATE INDEX idx_users_wecom_id ON users (wecom_id)'
+  );
+  await addIndexIfMissing(
+    'users',
+    'idx_users_feishu_open_id',
+    'CREATE INDEX idx_users_feishu_open_id ON users (feishu_open_id)'
+  );
   await addIndexIfMissing(
     'users',
     'idx_users_department_code',
