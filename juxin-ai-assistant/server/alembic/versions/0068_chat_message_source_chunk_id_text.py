@@ -15,20 +15,20 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.alter_column(
-        "ai_chat_message_sources",
-        "chunk_id",
-        existing_type=sa.String(length=64),
-        type_=sa.Text(),
-        existing_nullable=False,
-    )
+    with op.batch_alter_table("ai_chat_message_sources") as batch_op:
+        batch_op.alter_column(
+            "chunk_id",
+            existing_type=sa.String(length=64),
+            type_=sa.Text(),
+            existing_nullable=False,
+        )
 
 
 def downgrade() -> None:
-    op.alter_column(
-        "ai_chat_message_sources",
-        "chunk_id",
-        existing_type=sa.Text(),
-        type_=sa.String(length=64),
-        existing_nullable=False,
-    )
+    with op.batch_alter_table("ai_chat_message_sources") as batch_op:
+        batch_op.alter_column(
+            "chunk_id",
+            existing_type=sa.Text(),
+            type_=sa.String(length=64),
+            existing_nullable=False,
+        )

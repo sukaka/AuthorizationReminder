@@ -70,6 +70,7 @@ from .channel_routes import router as channel_router
 from .template_routes import router as template_router
 from .knowledge_version_routes import router as knowledge_version_router
 from .channel_webhook_routes import router as channel_webhook_router
+from .customer_service_routes import router as customer_service_router
 from .learning_eval_routes import router as learning_eval_router
 from .agent_hub_routes import router as agent_hub_router
 from .role_assistant_routes import router as role_assistant_router
@@ -1741,6 +1742,7 @@ app.include_router(ops_router)
 app.include_router(learning_candidate_router)
 app.include_router(channel_router)
 app.include_router(channel_webhook_router)
+app.include_router(customer_service_router)
 app.include_router(template_router)
 app.include_router(knowledge_version_router)
 app.include_router(learning_eval_router)

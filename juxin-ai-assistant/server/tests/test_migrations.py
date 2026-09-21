@@ -107,7 +107,7 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         migration_config("sqlite+pysqlite:///:memory:")
     )
 
-    assert script.get_heads() == ["0066_skill_uploads"]
+    assert script.get_heads() == ["0072_external_answer_cipher"]
     revision_ids = {revision.revision for revision in script.walk_revisions()}
     assert {
         "0060_enterprise_graph_memory",
@@ -117,6 +117,12 @@ def test_migration_revision_graph_is_single_linear_head() -> None:
         "0064_knowledge_external_download_control",
         "0065_chat_generated_files",
         "0066_skill_uploads",
+        "0067_agent_tool_calls_reconciliation_fields",
+        "0068_chat_message_source_chunk_id_text",
+        "0067_project_member_usernames",
+        "0069_long_task_payload_mediumblob",
+        "0070_chat_message_source_section_title_text",
+        "0072_external_answer_cipher",
         "0059_enterprise_metrics_health",
         "0058_enterprise_business_lineage",
         "0057_enterprise_identity_scope",

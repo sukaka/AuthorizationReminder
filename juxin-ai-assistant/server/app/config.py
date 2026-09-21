@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "聚信 AI 助手"
-    app_version: str = "5.17.3"
+    app_version: str = "5.18.0"
     environment: str = "development"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"
@@ -34,6 +34,20 @@ class Settings(BaseSettings):
     workflow_event_signature_credentials: str = ""
     workflow_event_signature_secret: str = ""
     workflow_event_signature_tolerance_seconds: int = Field(default=300, ge=1, le=3600)
+    # Signed ingress for third-party customer-service systems. Disabled until
+    # at least one explicit credential is configured by the deployment.
+    customer_service_api_enabled: bool = False
+    customer_service_api_credentials: str = ""
+    customer_service_api_signature_tolerance_seconds: int = Field(
+        default=300,
+        ge=1,
+        le=3600,
+    )
+    customer_service_api_model_max_output_tokens: int = Field(
+        default=1200,
+        ge=64,
+        le=8192,
+    )
     public_url: str = "http://localhost:18093"
     cors_origins: str = "http://localhost:18093,http://127.0.0.1:18093"
     export_storage_dir: str = "./exports"
@@ -179,6 +193,35 @@ class Settings(BaseSettings):
             elif not self.auth_dev_bypass:
                 raise ValueError(
                     "生产 signed event 必须配置 WORKFLOW_EVENT_SIGNATURE_CREDENTIALS"
+                )
+        if self.customer_service_api_enabled:
+            from .customer_service_security import (
+                CustomerServiceSignatureError,
+                parse_customer_service_credentials,
+            )
+            from .crypto import ContentCipher
+
+            try:
+                parse_customer_service_credentials(
+                    self.customer_service_api_credentials
+                )
+            except CustomerServiceSignatureError as exc:
+                raise ValueError(
+                    f"CUSTOMER_SERVICE_API_CREDENTIALS 配置无效: {exc.code}"
+                ) from exc
+            try:
+                ContentCipher(self.content_encryption_key)
+            except ValueError as exc:
+                raise ValueError(
+                    "启用客服 API 时 CONTENT_ENCRYPTION_KEY 必须是 32 字节 URL-safe base64"
+                ) from exc
+            if len(self.audit_hash_salt) < 32:
+                raise ValueError(
+                    "启用客服 API 时 AUDIT_HASH_SALT 至少需要 32 个字符"
+                )
+            if self.audit_hash_salt == self.content_encryption_key:
+                raise ValueError(
+                    "启用客服 API 时 AUDIT_HASH_SALT 不得复用 CONTENT_ENCRYPTION_KEY"
                 )
         if len(self.ai_local_binding_secret) < 32:
             raise ValueError("AI_LOCAL_BINDING_SECRET 至少需要 32 个字符")

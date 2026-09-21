@@ -507,6 +507,8 @@ class ExternalQuestionEvent(TimestampMixin, Base):
     external_message_id: Mapped[str] = mapped_column(String(128), index=True)
     question_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     question_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    answer_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    answer_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
     status: Mapped[str] = mapped_column(String(24), default="RECEIVED", index=True)
     source_file_ids_json: Mapped[list] = mapped_column(JSON, default=list)
     handoff_ticket_id: Mapped[str] = mapped_column(String(36), default="", index=True)
