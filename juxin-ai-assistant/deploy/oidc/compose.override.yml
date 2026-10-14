@@ -1,0 +1,14 @@
+# Use together with the repository-root docker-compose.yml, not on its own.
+services:
+  auth:
+    build:
+      args:
+        AUTH_NODE_IMAGE: ${AUTH_NODE_IMAGE:-node:24-bookworm-slim}
+    environment:
+      OIDC_ENABLED: ${OIDC_ENABLED:-false}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_JWKS_JSON: ${OIDC_JWKS_JSON:-}
+      OIDC_COOKIE_KEYS_JSON: ${OIDC_COOKIE_KEYS_JSON:-}
+      OIDC_STORAGE_KEY: ${OIDC_STORAGE_KEY:-}
+      OIDC_CLIENTS_JSON: ${OIDC_CLIENTS_JSON:-}
+      TRUST_PROXY_HOPS: ${TRUST_PROXY_HOPS:-}

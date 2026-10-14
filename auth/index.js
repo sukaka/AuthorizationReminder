@@ -10,6 +10,10 @@ const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const net = require('net');
+const { readOidcConfig } = require('./oidc-config');
+const { createOidcAdapter } = require('./oidc-adapter');
+const { createOidcService } = require('./oidc-service');
+let oidcService = null;
 const {
   createCsrfToken,
   isCsrfTokenValid,
@@ -597,6 +601,11 @@ app.disable('x-powered-by');
 if (process.env.TRUST_PROXY_HOPS) {
   app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS));
 }
+// Protocol bodies are parsed by oidc-provider, not the business API JSON parser.
+app.use('/oidc', (req, res, next) => {
+  if (!oidcService) return res.status(404).json({ error: 'OIDC_NOT_ENABLED' });
+  return oidcService.router(req, res, next);
+});
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
@@ -934,7 +943,23 @@ const authMiddleware = async (req, res, next) => {
     return res.status(401).json({ error: '未登录' });
   }
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      if (!oidcService || !parseBearerToken(req)) throw err;
+      const accessToken = await oidcService.provider.AccessToken.find(token);
+      const binding = accessToken && await oidcService.bindings.find(accessToken.grantId);
+      const system = accessToken && oidcService.config.systems.get(accessToken.clientId);
+      const identity = binding && await resolveOidcIdentity(accessToken.accountId, req, binding.userSessionId);
+      const grant = accessToken && await oidcService.provider.Grant.find(accessToken.grantId);
+      if (!identity || !grant || grant.accountId !== accessToken.accountId || grant.clientId !== accessToken.clientId || !identity.apps.includes(system) || !accessToken.scopes.has('openid')) throw err;
+      const permittedPath = ['/auth/introspect', '/auth/authorize', '/auth/system-users'].includes(req.path);
+      if (!permittedPath || (req.path === '/auth/authorize' && req.body?.system !== system) || (req.path === '/auth/system-users' && req.query.system !== system)) {
+        return res.status(403).json({ error: 'OIDC Token 无权调用此接口' });
+      }
+      payload = { id: Number(identity.sub), sid: identity.sessionId, role: identity.role };
+    }
     const sessionId = String(payload?.sid || '').trim();
     if (!sessionId) {
       clearAuthCookie(res);
@@ -7505,9 +7530,40 @@ app.use((err, req, res, next) => {
   return res.status(500).json({ error: err.message || '服务器内部错误' });
 });
 
+const resolveOidcIdentity = async (accountId, req, sessionId) => {
+  if (!/^\d+$/.test(String(accountId)) || !sessionId) return null;
+  const user = await db.get('SELECT * FROM users WHERE id = ?', [Number(accountId)]);
+  const session = await db.get('SELECT session_id, user_id, revoked_at, expires_at, created_at FROM auth_user_sessions WHERE session_id = ?', [sessionId]);
+  if (!user || Number(user.is_active) !== 1 || Number(session?.user_id) !== Number(user.id) || !isSessionRecordValid({ tokenSessionId: sessionId, sessionRecord: session })) return null;
+  const security = await getSecurityConfig();
+  if (isPasswordChangeRequired(user) || resolveUserMfaStatus({ user, securityConfig: security }).setupRequired) return null;
+  if (!checkRoleIpAccess({ role: user.role, ip: getRequestIp(req), securityConfig: security }).allowed) return null;
+  const authenticatedAt = Math.floor(mysqlDatetimeToUtcMs(session.created_at) / 1000);
+  if (!Number.isFinite(authenticatedAt)) return null;
+  return { accountId: String(user.id), sub: String(user.id), sessionId, username: user.username, role: user.role, apps: getUserAppAccess(user), authenticatedAt };
+};
+
 const start = async () => {
   validateSecurityBootstrap();
+  const oidcConfig = readOidcConfig();
   await db.ready;
+  if (oidcConfig.enabled) {
+    // Schema application is a separate, explicitly authorized deployment action.
+    await db.query('SELECT model, id, payload, expires_at, grant_id, user_code, uid, consumed FROM auth_oidc_artifacts LIMIT 0');
+    const resolveBrowser = async (req) => {
+      try {
+        const payload = jwt.verify(readCookieValue(req, AUTH_COOKIE_NAME), JWT_SECRET, { algorithms: ['HS256'] });
+        return await resolveOidcIdentity(String(payload.id), req, payload.sid);
+      } catch { return null; }
+    };
+    oidcService = await createOidcService({
+      config: { ...oidcConfig, trustProxy: Boolean(process.env.TRUST_PROXY_HOPS) },
+      Adapter: createOidcAdapter(db, oidcConfig.storageKey),
+      resolveBrowser,
+      resolveAccount: (accountId, req, _clientId, sessionId) => resolveOidcIdentity(accountId, req, sessionId),
+    });
+    oidcService.config = oidcConfig;
+  }
   await ensureBuiltinUsers();
   await backfillOperationLogSignatures();
   await backfillOperationLogSystems();

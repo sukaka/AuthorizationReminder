@@ -1,11 +1,14 @@
-ARG NODE_20_BOOKWORM_SLIM_IMAGE=node:20-bookworm-slim
+ARG AUTH_NODE_IMAGE=node:24-bookworm-slim
 ARG NPM_REGISTRY=https://registry.npmmirror.com
-FROM ${NODE_20_BOOKWORM_SLIM_IMAGE}
+FROM ${AUTH_NODE_IMAGE}
 
 WORKDIR /app
 
 COPY auth/package*.json ./auth/
 COPY auth/index.js ./auth/index.js
+COPY auth/oidc-config.js ./auth/oidc-config.js
+COPY auth/oidc-adapter.js ./auth/oidc-adapter.js
+COPY auth/oidc-service.js ./auth/oidc-service.js
 COPY auth/admin-center-users.js ./auth/admin-center-users.js
 COPY auth/admin-center-departments.js ./auth/admin-center-departments.js
 COPY auth/admin-center-security.js ./auth/admin-center-security.js
