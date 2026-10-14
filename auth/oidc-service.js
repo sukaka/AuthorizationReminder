@@ -13,13 +13,16 @@ async function createOidcService({ config, Adapter, resolveBrowser, resolveAccou
     scopes: ['openid', 'profile'],
     claims: { openid: ['sub'], profile: ['preferred_username', 'role', 'apps'] },
     pkce: { required: () => true },
+    issueRefreshToken: (_ctx, client) => Boolean(config.rpClientIds?.has(client.clientId)) && client.grantTypeAllowed('refresh_token'),
+    // Confidential BFF clients keep refresh tokens encrypted and bounded by the portal session.
+    rotateRefreshToken: false,
     features: {
       devInteractions: { enabled: false },
       revocation: { enabled: true, allowedPolicy: (_ctx, client, token) => token.clientId === client.clientId },
       // Global portal logout remains authoritative until a coordinated logout UX is deployed.
       rpInitiatedLogout: { enabled: false },
     },
-    ttl: { AccessToken: 900, AuthorizationCode: 60, IdToken: 900, Interaction: 600, Session: 28800, Grant: 28800 },
+    ttl: { AccessToken: 900, RefreshToken: 28800, AuthorizationCode: 60, IdToken: 900, Interaction: 600, Session: 28800, Grant: 28800 },
     interactions: { url: (_ctx, interaction) => `/oidc/interaction/${interaction.uid}` },
     async loadExistingGrant(ctx) {
       const grantId = ctx.oidc.result?.consent?.grantId || ctx.oidc.session.grantIdFor(ctx.oidc.client.clientId);

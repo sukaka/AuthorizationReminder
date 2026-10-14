@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
 const express = require('express');
+const cookieParser = require('cookie-parser');
+const { createRpService, readRpConfig } = require('../oidc-rp');
 const { createOidcService } = require('../oidc-service');
 
 test('discovery, PKCE, single-use code, userinfo and source-session revocation', async (t) => {
@@ -23,11 +25,12 @@ test('discovery, PKCE, single-use code, userinfo and source-session revocation',
   const origin = `http://127.0.0.1:${server.address().port}`;
   const { privateKey } = crypto.generateKeyPairSync('rsa', { modulusLength: 2048 });
   const client = { client_id: 'desktop', token_endpoint_auth_method: 'none', application_type: 'native', redirect_uris: ['http://127.0.0.1:39999/callback'], grant_types: ['authorization_code'], response_types: ['code'] };
-  const web = { client_id: 'web', client_secret: crypto.randomBytes(32).toString('base64url'), token_endpoint_auth_method: 'client_secret_basic', application_type: 'web', redirect_uris: ['https://web.example.test/callback'], grant_types: ['authorization_code'], response_types: ['code'] };
+  const web = { client_id: 'web', client_secret: crypto.randomBytes(32).toString('base64url'), token_endpoint_auth_method: 'client_secret_basic', application_type: 'web', redirect_uris: ['https://web.example.test/api/oidc/ai-assistant/callback'], grant_types: ['authorization_code', 'refresh_token'], response_types: ['code'] };
   let active = true;
   const identity = { accountId: '7', sub: '7', sessionId: 'test-session', username: 'tester', role: 'member', apps: ['ai-assistant'], authenticatedAt: Math.floor(Date.now() / 1000) };
+  const config = { enabled: true, issuer: `${origin}/oidc`, clients: [client, web], rpClientIds: new Set(['web']), systems: new Map([['desktop', 'ai-assistant'], ['web', 'ai-assistant']]), jwks: { keys: [{ ...privateKey.export({ format: 'jwk' }), kid: 'test', use: 'sig', alg: 'RS256' }] }, cookieKeys: [crypto.randomBytes(32).toString('base64url')] };
   const service = await createOidcService({
-    config: { issuer: `${origin}/oidc`, clients: [client, web], systems: new Map([['desktop', 'ai-assistant'], ['web', 'ai-assistant']]), jwks: { keys: [{ ...privateKey.export({ format: 'jwk' }), kid: 'test', use: 'sig', alg: 'RS256' }] }, cookieKeys: [crypto.randomBytes(32).toString('base64url')] },
+    config,
     Adapter, resolveBrowser: async () => active ? identity : null,
     resolveAccount: async (accountId, _req, clientId, sessionId) => {
       assert.equal(accountId, '7');
@@ -37,6 +40,9 @@ test('discovery, PKCE, single-use code, userinfo and source-session revocation',
     },
   });
   app.use('/oidc', service.router);
+  const rp = createRpService({ config, Adapter, apps: readRpConfig(config, { OIDC_RP_APPS_JSON: JSON.stringify([{ system: 'ai-assistant', client_id: 'web', app_url: 'https://web.example.test/' }]) }) });
+  app.use(cookieParser());
+  app.use('/api/oidc', rp.router);
   const discovery = await (await fetch(`${origin}/oidc/.well-known/openid-configuration`)).json();
   assert.equal(discovery.issuer, `${origin}/oidc`);
   assert.deepEqual(discovery.response_types_supported, ['code']);
@@ -108,7 +114,35 @@ test('discovery, PKCE, single-use code, userinfo and source-session revocation',
   assert.equal(webVerified.payload.sub, '7');
   await request(discovery.revocation_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ client_id: 'desktop', token: webTokens.access_token }) });
   assert.equal((await request(discovery.userinfo_endpoint, { headers: { authorization: `Bearer ${webTokens.access_token}` } })).status, 200, 'a different client cannot revoke this token');
+  let rpResponse = await request(`${origin}/api/oidc/ai-assistant/login`);
+  assert.match(rpResponse.headers.get('set-cookie'), /HttpOnly/);
+  let rpCallback;
+  for (let i = 0; i < 10; i++) {
+    const next = new URL(rpResponse.headers.get('location'), origin);
+    if (next.origin !== origin) { rpCallback = next; break; }
+    rpResponse = await request(next.href);
+  }
+  assert.ok(rpCallback?.searchParams.get('code'));
+  const localCallback = `${origin}${rpCallback.pathname}${rpCallback.search}`;
+  assert.equal((await fetch(localCallback, { redirect: 'manual' })).status, 400, 'callback requires the initiating browser cookie');
+  rpResponse = await request(localCallback);
+  assert.equal(rpResponse.status, 302);
+  assert.equal(rpResponse.headers.get('location'), 'https://web.example.test/');
+  const handle = jar.get('__Secure-juxin_oidc_ai_assistant');
+  assert.match(handle, /^rp_/);
+  assert.equal((await request(localCallback)).status, 400, 'callback cannot be replayed');
+  assert.equal(await rp.resolve(handle, 'train-exam'), null, 'session cannot cross applications');
+  const rpSession = records.get(`JuxinRpSession:${handle}`);
+  assert.ok(rpSession.refreshToken);
+  rpSession.expiresAt = 0;
+  const refreshed = await rp.resolve(handle, 'ai-assistant');
+  assert.ok(refreshed);
+  assert.equal((await request(discovery.userinfo_endpoint, { headers: { authorization: `Bearer ${refreshed}` } })).status, 200);
+  assert.equal((await request(`${origin}/api/oidc/ai-assistant/logout`, { method: 'POST', headers: { origin: 'https://attacker.example.test' } })).status, 403);
   active = false;
+  records.get(`JuxinRpSession:${handle}`).expiresAt = 0;
+  assert.equal(await rp.resolve(handle, 'ai-assistant'), null, 'portal revocation also blocks renewal');
+  assert.equal((await request(`${origin}/api/oidc/ai-assistant/logout`, { method: 'POST', headers: { origin: 'https://web.example.test' } })).status, 204);
   assert.equal((await request(discovery.userinfo_endpoint, { headers: { authorization: `Bearer ${thirdTokens.access_token}` } })).status, 401);
   const staleSession = await authorize();
   assert.equal(staleSession.searchParams.get('error'), 'login_required');

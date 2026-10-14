@@ -9,6 +9,7 @@ COPY auth/index.js ./auth/index.js
 COPY auth/oidc-config.js ./auth/oidc-config.js
 COPY auth/oidc-adapter.js ./auth/oidc-adapter.js
 COPY auth/oidc-service.js ./auth/oidc-service.js
+COPY auth/oidc-rp.js ./auth/oidc-rp.js
 COPY auth/admin-center-users.js ./auth/admin-center-users.js
 COPY auth/admin-center-departments.js ./auth/admin-center-departments.js
 COPY auth/admin-center-security.js ./auth/admin-center-security.js

@@ -11,9 +11,11 @@ const jwt = require('jsonwebtoken');
 const crypto = require('crypto');
 const net = require('net');
 const { readOidcConfig } = require('./oidc-config');
+const { readRpConfig, createRpService } = require('./oidc-rp');
 const { createOidcAdapter } = require('./oidc-adapter');
 const { createOidcService } = require('./oidc-service');
 let oidcService = null;
+let oidcRpService = null;
 const {
   createCsrfToken,
   isCsrfTokenValid,
@@ -609,6 +611,10 @@ app.use('/oidc', (req, res, next) => {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
+app.use('/api/oidc', (req, res, next) => {
+  if (!oidcRpService) return res.status(404).json({ error: 'OIDC_RP_NOT_ENABLED' });
+  return oidcRpService.router(req, res, next);
+});
 const adminCenterImportUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: IMPORT_UPLOAD_MAX_BYTES },
@@ -945,12 +951,17 @@ const authMiddleware = async (req, res, next) => {
   try {
     let payload;
     try {
+      if (req.get('X-Juxin-OIDC-System')) throw new Error('OIDC required');
       payload = jwt.verify(token, JWT_SECRET);
     } catch (err) {
-      if (!oidcService || !parseBearerToken(req)) throw err;
-      const accessToken = await oidcService.provider.AccessToken.find(token);
+      if (!oidcService || !parseBearerToken(req.headers.authorization)) throw err;
+      const expectedSystem = req.get('X-Juxin-OIDC-System');
+      const resolvedToken = token.startsWith('rp_') ? await oidcRpService?.resolve(token, expectedSystem, getRequestIp(req)) : token;
+      if (!resolvedToken) throw err;
+      const accessToken = await oidcService.provider.AccessToken.find(resolvedToken);
       const binding = accessToken && await oidcService.bindings.find(accessToken.grantId);
       const system = accessToken && oidcService.config.systems.get(accessToken.clientId);
+      if (expectedSystem && expectedSystem !== system) throw err;
       const identity = binding && await resolveOidcIdentity(accessToken.accountId, req, binding.userSessionId);
       const grant = accessToken && await oidcService.provider.Grant.find(accessToken.grantId);
       if (!identity || !grant || grant.accountId !== accessToken.accountId || grant.clientId !== accessToken.clientId || !identity.apps.includes(system) || !accessToken.scopes.has('openid')) throw err;
@@ -959,6 +970,7 @@ const authMiddleware = async (req, res, next) => {
         return res.status(403).json({ error: 'OIDC Token 无权调用此接口' });
       }
       payload = { id: Number(identity.sub), sid: identity.sessionId, role: identity.role };
+      req.oidcSystem = system;
     }
     const sessionId = String(payload?.sid || '').trim();
     if (!sessionId) {
@@ -1483,7 +1495,7 @@ app.get('/api/auth/introspect', async (req, res) => {
     return sendPasswordChangeRequired(res, user);
   }
   const scope = await buildUserScope(user);
-  const apps = getUserAppAccess(user);
+  const apps = req.oidcSystem ? [req.oidcSystem] : getUserAppAccess(user);
   res.json({ user: buildAuthUserPayload(user), scope, apps });
 });
 
@@ -1660,7 +1672,10 @@ app.get('/api/auth/apps', async (req, res) => {
   }
   return res.json({
     user: buildAuthUserPayload(user),
-    apps: apps.filter((item) => item.allow),
+    apps: apps.filter((item) => item.allow).map((item) => {
+      const rp = oidcRpService?.apps.get(item.key);
+      return rp ? { ...item, oidcLoginUrl: rp.loginUrl } : item;
+    }),
   });
 });
 
@@ -5649,6 +5664,7 @@ app.get('/portal', async (req, res) => {
         }
       }
       function appEntryUrl(app, token) {
+        if (app.oidcLoginUrl) return app.oidcLoginUrl;
         return appendPortalSession(useCurrentPortalHost(app.url), appSsoToken(app, token));
       }
       if (portalMode !== 'switch' && privilegedDefaultSystemKey) {
@@ -7546,6 +7562,8 @@ const resolveOidcIdentity = async (accountId, req, sessionId) => {
 const start = async () => {
   validateSecurityBootstrap();
   const oidcConfig = readOidcConfig();
+  const rpApps = readRpConfig(oidcConfig);
+  for (const rp of rpApps.values()) rp.client.grant_types = ['authorization_code', 'refresh_token'];
   await db.ready;
   if (oidcConfig.enabled) {
     // Schema application is a separate, explicitly authorized deployment action.
@@ -7556,13 +7574,15 @@ const start = async () => {
         return await resolveOidcIdentity(String(payload.id), req, payload.sid);
       } catch { return null; }
     };
+    const Adapter = createOidcAdapter(db, oidcConfig.storageKey);
     oidcService = await createOidcService({
-      config: { ...oidcConfig, trustProxy: Boolean(process.env.TRUST_PROXY_HOPS) },
-      Adapter: createOidcAdapter(db, oidcConfig.storageKey),
+      config: { ...oidcConfig, rpClientIds: new Set([...rpApps.values()].map((app) => app.client.client_id)), trustProxy: Boolean(process.env.TRUST_PROXY_HOPS) },
+      Adapter,
       resolveBrowser,
       resolveAccount: (accountId, req, _clientId, sessionId) => resolveOidcIdentity(accountId, req, sessionId),
     });
     oidcService.config = oidcConfig;
+    oidcRpService = createRpService({ config: oidcConfig, apps: rpApps, Adapter });
   }
   await ensureBuiltinUsers();
   await backfillOperationLogSignatures();
