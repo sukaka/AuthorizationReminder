@@ -9,7 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     app_name: str = "聚信 AI 助手"
-    app_version: str = "5.18.0"
+    app_version: str = "5.19.0"
     environment: str = "development"
     database_url: str = "sqlite+pysqlite:///./juxin-ai-assistant-dev.db"
     auth_service_url: str = "http://auth:5180"
@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     auth_fetch_timeout_ms: int = Field(default=5000, ge=1000, le=30000)
     auth_dev_bypass: bool = False
     web_spa_enabled: bool = False
+    auth_oidc_required: bool = False
     web_static_dir: str = "../apps/desktop/dist"
     prompt_center_url: str = "http://prompt-center-api:5189"
     prompt_center_runtime_token: str = ""

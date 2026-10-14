@@ -9,7 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from .admin.route_common import write_request_audit
-from .auth import get_request_auth_token, get_session, require_action
+from .auth import auth_service_options, get_request_auth_token, get_session, require_action
 from .config import Settings, get_settings
 from .database import get_db
 from .project_access import (
@@ -152,8 +152,7 @@ async def _fetch_system_user_directory(
         async with httpx.AsyncClient(
             base_url=current_settings.auth_service_url,
             timeout=current_settings.auth_fetch_timeout_ms / 1000,
-            cookies={current_settings.auth_cookie_name: token},
-            headers={"Authorization": f"Bearer {token}"} if uses_bearer else None,
+            **auth_service_options(token, uses_bearer, current_settings, request),
         ) as client:
             response = await client.get(
                 "/api/auth/system-users",

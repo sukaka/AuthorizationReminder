@@ -20,7 +20,22 @@ def get_request_auth_token(request: Request, settings: Settings) -> tuple[str, b
     scheme, _, value = authorization.partition(" ")
     if scheme.lower() == "bearer" and value.strip():
         return value.strip(), True
-    return str(request.cookies.get(settings.auth_cookie_name) or "").strip(), False
+    return str(request.cookies.get(settings.auth_cookie_name) or "").strip(), settings.auth_oidc_required
+
+
+def auth_service_options(token: str, uses_bearer: bool, settings: Settings, request: Request | None = None) -> dict[str, Any]:
+    if settings.auth_oidc_required:
+        headers = {"Authorization": f"Bearer {token}", "X-Juxin-OIDC-System": settings.auth_system_key}
+        # The ingress must overwrite X-Real-IP and prevent direct backend access.
+        if request is not None:
+            source_ip = request.headers.get("x-real-ip") or (request.client.host if request.client else "")
+            if source_ip:
+                headers["X-Forwarded-For"] = source_ip
+        return {"headers": headers}
+    return {
+        "cookies": {settings.auth_cookie_name: token},
+        "headers": {"Authorization": f"Bearer {token}"} if uses_bearer else None,
+    }
 
 
 async def get_session(
@@ -44,8 +59,7 @@ async def get_session(
         async with httpx.AsyncClient(
             base_url=settings.auth_service_url,
             timeout=settings.auth_fetch_timeout_ms / 1000,
-            cookies={settings.auth_cookie_name: token},
-            headers={"Authorization": f"Bearer {token}"} if uses_bearer else None,
+            **auth_service_options(token, uses_bearer, settings, request),
         ) as client:
             response = await client.get("/api/auth/introspect")
     except httpx.HTTPError as exc:
@@ -94,8 +108,7 @@ async def require_action(
         async with httpx.AsyncClient(
             base_url=settings.auth_service_url,
             timeout=settings.auth_fetch_timeout_ms / 1000,
-            cookies={settings.auth_cookie_name: token},
-            headers={"Authorization": f"Bearer {token}"} if uses_bearer else None,
+            **auth_service_options(token, uses_bearer, settings, request),
         ) as client:
             body: dict[str, Any] = {
                 "system": settings.auth_system_key,

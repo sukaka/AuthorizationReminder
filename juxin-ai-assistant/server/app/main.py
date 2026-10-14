@@ -1679,13 +1679,17 @@ async def logout(
 ) -> Response:
     token = request.cookies.get(current_settings.auth_cookie_name)
     if token:
+        oidc = current_settings.auth_oidc_required
+        logout_path = "/api/oidc/ai-assistant/logout" if oidc else "/api/auth/logout"
+        headers = {"Origin": request.headers.get("origin", "")} if oidc else {}
         try:
             async with httpx.AsyncClient(
                 base_url=current_settings.auth_service_url,
                 timeout=current_settings.auth_fetch_timeout_ms / 1000,
                 cookies={current_settings.auth_cookie_name: token},
+                headers=headers,
             ) as client:
-                upstream = await client.post("/api/auth/logout")
+                upstream = await client.post(logout_path)
         except httpx.HTTPError:
             return JSONResponse(
                 status_code=503,

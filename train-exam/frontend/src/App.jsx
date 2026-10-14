@@ -329,6 +329,7 @@ const getPortalBaseUrl = () => {
 }
 
 const buildPortalEntryUrl = (system) => {
+  if (import.meta.env.VITE_OIDC_ENABLED === 'true' && system === 'train-exam') return '/api/oidc/train-exam/login'
   const base = getPortalBaseUrl()
   return `${base}/portal?system=${encodeURIComponent(system)}`
 }
@@ -1933,6 +1934,18 @@ function App() {
   const onLogout = async () => {
     if (logoutPending) return
     setLogoutPending(true)
+    if (String(import.meta.env.VITE_OIDC_ENABLED) === 'true') {
+      try {
+        await fetch('/api/oidc/train-exam/logout', { method: 'POST', credentials: 'include' })
+      } catch {
+        // 门户退出仍会撤销源会话，不能因本地退出网络故障阻止全局退出。
+      } finally {
+        const logoutUrl = new URL(buildPortalLoginUrl())
+        logoutUrl.searchParams.set('logout', '1')
+        window.location.replace(logoutUrl.href)
+      }
+      return
+    }
     try {
       const csrfResp = await fetch(`${API_BASE}/api/auth/csrf`, {
         credentials: 'include',

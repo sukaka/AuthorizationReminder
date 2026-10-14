@@ -2,6 +2,8 @@ ARG NODE_20_ALPINE_IMAGE=node:20-alpine
 ARG NGINX_ALPINE_IMAGE=nginx:alpine
 ARG NPM_REGISTRY=https://registry.npmmirror.com
 FROM ${NODE_20_ALPINE_IMAGE} AS build
+ARG VITE_OIDC_ENABLED=false
+ENV VITE_OIDC_ENABLED=$VITE_OIDC_ENABLED
 WORKDIR /app
 COPY package*.json ./
 RUN npm config set registry "${NPM_REGISTRY}" \

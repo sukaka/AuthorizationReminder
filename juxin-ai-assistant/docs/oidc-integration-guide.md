@@ -6,9 +6,9 @@
 
 已支持：OIDC Discovery、公开 JWKS、Authorization Code + S256 PKCE、RS256 ID Token、UserInfo、Token Revocation。授权码 60 秒，Access Token / ID Token 15 分钟，OIDC 会话 / Grant 最长 8 小时，且不能超过原统一登录会话的有效状态。
 
-当前不提供：隐式授权、密码授权、客户端凭据授权、Refresh Token、动态客户端注册、OAuth Introspection 端点、RP-Initiated Logout。`/api/auth/introspect` 是旧业务接口，不能冒充标准 OAuth Introspection。
+当前不提供：隐式授权、密码授权、客户端凭据授权、动态客户端注册、OAuth Introspection 端点、RP-Initiated Logout。Refresh Token 仅对明确配置的考试和 AI 机密 BFF 客户端开放，最长 8 小时、加密保存并继承门户撤销；其他客户端不开放。`/api/auth/introspect` 是业务接口，不能冒充标准 OAuth Introspection。
 
-旧业务登录仍兼容；启用 OIDC 不会自动把现有应用的登录页面改成 OIDC。聚信助手后端可通过已有 Bearer 方式传递标准 Access Token，登录入口、回调、客户端会话仍需另外实施和联调。本次未执行真实数据库迁移、部署、版本升级、Git 提交或推送。
+旧业务登录仍兼容；启用 Provider 本身不会自动切换应用。考试系统和 AI 助手已增加可显式启用的登录入口、回调、服务端会话和严格校验，部署步骤见 [两系统接入手册](exam-ai-oidc-guide.md)。其他系统不切换。本次未执行真实数据库迁移、部署、版本升级、Git 提交或推送。
 
 ## 2. 服务端文件
 
@@ -16,6 +16,7 @@
 | --- | --- |
 | `auth/oidc-config.js` | 配置校验，缺少安全配置则拒绝启用 |
 | `auth/oidc-service.js` | 协议 Provider、已有登录交互与会话绑定 |
+| `auth/oidc-rp.js` | 考试与 AI 的机密 BFF、回调、会话、刷新和退出 |
 | `auth/oidc-adapter.js` | MySQL 持久化；AES-256-GCM 加密并绑定记录 model/id |
 | `auth/oidc-schema.sql` | 需显式执行的建表脚本，不由服务自动执行 |
 | `auth/index.js` | 协议挂载、原登录校验和业务权限桥接 |
@@ -62,14 +63,14 @@ Web 服务端客户端模板（占位值不是可用密钥或实际地址）：
     "system_key": "ai-assistant",
     "token_endpoint_auth_method": "client_secret_basic",
     "client_secret": "REPLACE_WITH_AT_LEAST_32_RANDOM_BYTES_BASE64URL",
-    "redirect_uris": ["https://assistant.example.com/api/ai/oidc/callback"],
+    "redirect_uris": ["https://assistant.example.com/api/oidc/ai-assistant/callback"],
     "grant_types": ["authorization_code"],
     "response_types": ["code"]
   }
 ]
 ```
 
-此回调路径只是接入方案示例，助手当前并未实现它，不能直接注册后就认为已完成接入。Web 客户端密钥必须保存在服务端，不能放入前端 JS。
+此回调由 auth 的 BFF 实现，必须同时配置 RP 应用和应用入口代理，不能仅注册客户端。Web 客户端密钥只保存在服务端，不能放入前端 JS。
 
 桌面公共客户端使用 `token_endpoint_auth_method: "none"`、无 client_secret、数字回环回调（例如 `http://127.0.0.1:54321/callback`）。客户端必须实现本地回调监听，使用系统浏览器；不要用嵌入 WebView 收集密码。当前不支持自定义 scheme 回调。原生回环端口匹配遵循协议库的原生客户端规则，不应把服务端登记端口当成额外身份验证。
 
@@ -95,7 +96,7 @@ WHERE expires_at <= UNIX_TIMESTAMP() LIMIT 1000;
 
 ### 3.4 HTTPS 路由
 
-现有网关配置尚未统一增加 OIDC 路由。选择实际生效的 Nginx 配置增加以下路由，保持 `/oidc` 路径，不重写成 `/api/auth`：
+仓库的 `https-nginx/default.conf` 和助手部署网关已增加 `/oidc/`；两个应用入口增加 `/api/oidc/`。迁移机器若使用自定义网关，须确认实际生效配置包含以下路由，保持 `/oidc` 路径，不重写成 `/api/auth`：
 
 ```nginx
 location ^~ /oidc/ {
@@ -153,7 +154,7 @@ Token 只可用于其注册 `system_key` 对应的授权检查和用户目录查
 
 ## 6. 验收与回滚
 
-本次本地验证：使用 Node 24.13.0 执行 `node --test tests/*.test.js`，179 项通过，含 10 项新增 OIDC 测试。协议测试覆盖公开原生客户端与服务端 Basic 认证、PKCE、签名/issuer/audience/nonce、授权码重放、Token 撤销与客户端隔离、源会话失效、应用权限撤销，只使用本机随机端口和内存账号/适配器。另执行语法检查与 `git diff --check`。未进行真实 MySQL 适配器集成、真实浏览器/MFA、Docker 构建或生产部署验证，不是 OIDC 官方一致性认证。
+Provider 和 RP 的最新验证、待验项目见 [两系统接入手册](exam-ai-oidc-guide.md)。协议测试只使用本机随机端口和内存账号/适配器，覆盖 PKCE、签名、重放、撤销、系统隔离与 RP 会话刷新；不能替代真实 MySQL、HTTPS、浏览器/MFA 和桌面联调，也不是 OIDC 官方一致性认证。
 
 上线前必须在隔离环境补验：
 

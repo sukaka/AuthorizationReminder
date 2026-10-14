@@ -384,6 +384,9 @@ function formatAuthPortalUrl(url: URL, options: AuthPortalUrlOptions): string {
 }
 
 export function getAuthPortalUrl(options: AuthPortalUrlOptions = {}): string {
+  if (import.meta.env.VITE_OIDC_ENABLED === 'true' && !options.logout && (!options.system || options.system === 'ai-assistant')) {
+    return new URL('/api/oidc/ai-assistant/login', window.location.origin).toString();
+  }
   if (
     isDesktopRuntime() &&
     typeof window.__JUXIN_DESKTOP_AUTH_PORTAL__ === 'string'

@@ -1,0 +1,23 @@
+# Explicit opt-in for the two first-party clients; combine with compose.override.yml.
+services:
+  auth:
+    environment:
+      OIDC_ENABLED: "true"
+      OIDC_RP_REQUIRED_SYSTEMS: train-exam,ai-assistant
+      OIDC_RP_APPS_JSON: ${OIDC_RP_APPS_JSON:?Register both exam and AI OIDC applications first}
+  train-exam-api:
+    environment:
+      AUTH_OIDC_REQUIRED: "true"
+      AUTH_COOKIE_NAME: __Secure-juxin_oidc_train_exam
+  ai-assistant-api:
+    environment:
+      AUTH_OIDC_REQUIRED: "true"
+      AUTH_COOKIE_NAME: __Secure-juxin_oidc_ai_assistant
+  web-train-exam:
+    build:
+      args:
+        VITE_OIDC_ENABLED: "true"
+  web-ai-assistant:
+    build:
+      args:
+        VITE_OIDC_ENABLED: "true"

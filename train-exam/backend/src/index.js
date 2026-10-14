@@ -112,6 +112,7 @@ const PORT = Number(process.env.PORT || 5188);
 const AUTH_SERVICE_URL = process.env.AUTH_SERVICE_URL || 'http://localhost:5180';
 const AUTH_SYSTEM_KEY = String(process.env.AUTH_SYSTEM_KEY || 'train-exam').trim() || 'train-exam';
 const AUTH_COOKIE_NAME = String(process.env.AUTH_COOKIE_NAME || 'juxin_auth_token').trim() || 'juxin_auth_token';
+const AUTH_OIDC_REQUIRED = process.env.AUTH_OIDC_REQUIRED === 'true';
 const AUTH_FETCH_TIMEOUT_MS = Math.max(1000, Number(process.env.AUTH_FETCH_TIMEOUT_MS || 5000));
 const SECURITY_STRICT_MODE = process.env.SECURITY_STRICT_MODE === 'true' || process.env.NODE_ENV === 'production';
 const CSRF_COOKIE_NAME = String(process.env.TRAIN_EXAM_CSRF_COOKIE_NAME || 'train_exam_csrf_token').trim() || 'train_exam_csrf_token';
@@ -654,14 +655,14 @@ const extractCookieToken = (cookieHeader) => {
   return '';
 };
 
-const introspectToken = async (token) => {
+const introspectToken = async (token, req) => {
   let resp;
   try {
     resp = await fetchWithTimeout(
       `${AUTH_SERVICE_URL}/api/auth/introspect`,
       {
         method: 'GET',
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${token}`, ...(AUTH_OIDC_REQUIRED ? { 'X-Juxin-OIDC-System': AUTH_SYSTEM_KEY, 'X-Forwarded-For': req.headers['x-real-ip'] || req.socket.remoteAddress } : {}) },
       },
       AUTH_FETCH_TIMEOUT_MS
     );
@@ -988,7 +989,7 @@ const authRequired = asyncHandler(async (req, _res, next) => {
   if (!token) throw appError('未登录', 401);
   if (token.length < 16 || token.length > 4096) throw appError('登录凭证非法', 401);
 
-  const auth = await introspectToken(token);
+  const auth = await introspectToken(token, req);
   req.user = auth.user;
   req.authApps = auth.apps;
   next();

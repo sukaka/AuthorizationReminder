@@ -17,12 +17,44 @@ def test_service_has_no_standalone_login_route() -> None:
     assert "/api/auth/login" not in routes
 
 
+def test_oidc_cookie_is_forwarded_as_system_bound_bearer(sso_client, sso_settings, respx_mock) -> None:
+    sso_settings.auth_oidc_required = True
+    sso_settings.auth_cookie_name = "__Secure-juxin_oidc_ai_assistant"
+    introspect = respx_mock.get("http://auth.test:5180/api/auth/introspect").mock(
+        return_value=httpx.Response(200, json={"user": {"id": 7, "username": "test", "role": "user"}, "scope": {}, "apps": ["ai-assistant"]})
+    )
+    sso_client.cookies.set(sso_settings.auth_cookie_name, "rp_test")
+    assert sso_client.get("/api/ai/session", headers={"X-Real-IP": "192.0.2.7"}).status_code == 200
+    outbound = introspect.calls[0].request
+    assert outbound.headers["authorization"] == "Bearer rp_test"
+    assert outbound.headers["x-juxin-oidc-system"] == "ai-assistant"
+    assert outbound.headers["x-forwarded-for"] == "192.0.2.7"
+    assert "cookie" not in outbound.headers
+
+
 def test_session_returns_unified_user(client: TestClient) -> None:
     response = client.get("/api/ai/session")
 
     assert response.status_code == 200
     assert response.json()["user"]["username"] == "dev_admin"
     assert response.json()["apps"] == ["ai-assistant"]
+
+
+@pytest.mark.asyncio
+async def test_oidc_user_directory_uses_system_bound_bearer(sso_settings, respx_mock) -> None:
+    from app.project_routes import _fetch_system_user_directory
+
+    sso_settings.auth_oidc_required = True
+    sso_settings.auth_cookie_name = "__Secure-juxin_oidc_ai_assistant"
+    directory = respx_mock.get("http://auth.test:5180/api/auth/system-users").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+    request = Request({"type": "http", "headers": [(b"cookie", b"__Secure-juxin_oidc_ai_assistant=rp_test")]})
+    assert await _fetch_system_user_directory(request, sso_settings) == []
+    outbound = directory.calls[0].request
+    assert outbound.headers["authorization"] == "Bearer rp_test"
+    assert outbound.headers["x-juxin-oidc-system"] == "ai-assistant"
+    assert "cookie" not in outbound.headers
 
 
 @pytest.fixture
@@ -207,6 +239,19 @@ def test_logout_uses_unified_logout_and_clears_cookie(
     assert outbound.content == b""
     assert "juxin_auth_token=" in response.headers["set-cookie"]
     assert "Max-Age=0" in response.headers["set-cookie"]
+
+
+def test_oidc_logout_forwards_origin_and_rp_cookie(sso_client, sso_settings, respx_mock) -> None:
+    sso_settings.auth_oidc_required = True
+    sso_settings.auth_cookie_name = "__Secure-juxin_oidc_ai_assistant"
+    upstream = respx_mock.post("http://auth.test:5180/api/oidc/ai-assistant/logout").mock(
+        return_value=httpx.Response(204)
+    )
+    sso_client.cookies.set(sso_settings.auth_cookie_name, "rp_test")
+    response = sso_client.post("/api/ai/logout", headers={"Origin": "https://ai.example.test"})
+    assert response.status_code == 204
+    assert upstream.calls[0].request.headers["origin"] == "https://ai.example.test"
+    assert upstream.calls[0].request.headers["cookie"] == "__Secure-juxin_oidc_ai_assistant=rp_test"
 
 
 def request_with_auth_cookie(value: str = "opaque-session") -> Request:
