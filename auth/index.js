@@ -38,6 +38,7 @@ const {
 const {
   buildSocialLoginAuthorizationUrl,
   createSocialLoginState,
+  createSocialLoginRequestContext,
   exchangeSocialAuthorizationCode,
   getEnabledSocialLoginProviders,
   readSocialLoginConfig,
@@ -6722,10 +6723,16 @@ app.get('/api/auth/captcha', async (req, res) => {
 
 app.get('/api/auth/sso/:provider/start', (req, res) => {
   const provider = String(req.params.provider || '').trim().toLowerCase();
-  const context = normalizeSocialLoginContext(req.query);
+  let context = normalizeSocialLoginContext(req.query);
   res.set('Cache-Control', 'no-store');
   clearSocialLoginMfaCookie(res);
   try {
+    context = createSocialLoginRequestContext({
+      provider,
+      query: { ...context, entry: req.query.entry },
+      userAgent: req.get('user-agent'),
+      examOidcEnabled: Boolean(oidcRpService?.apps?.has('train-exam')),
+    });
     const { state, cookieToken } = createSocialLoginState({
       provider,
       signingSecret: JWT_SECRET,
@@ -6736,6 +6743,7 @@ app.get('/api/auth/sso/:provider/start', (req, res) => {
       provider,
       config: SOCIAL_LOGIN_CONFIG,
       state,
+      context,
     });
     res.cookie(
       getSocialLoginStateCookieName(provider),
@@ -6769,6 +6777,9 @@ app.get('/api/auth/sso/:provider/callback', async (req, res) => {
       cookieToken: stateCookie,
       signingSecret: JWT_SECRET,
     });
+    if (context.entry === 'workbench' && !oidcRpService?.apps?.has('train-exam')) {
+      throw createSocialLoginError('provider_disabled');
+    }
     if (req.query.error || req.query.error_code || req.query.errcode) {
       throw createSocialLoginError('authorization_cancelled');
     }
@@ -6777,6 +6788,7 @@ app.get('/api/auth/sso/:provider/callback', async (req, res) => {
       provider,
       config: SOCIAL_LOGIN_CONFIG,
       code: req.query.code,
+      context,
     });
     const identityColumn = provider === 'wecom' ? 'wecom_id' : 'feishu_open_id';
     const matches = await db.query(

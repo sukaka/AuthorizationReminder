@@ -99,16 +99,24 @@ const getEnabledSocialLoginProviders = (config) =>
     .filter((provider) => provider?.enabled)
     .map((provider) => ({ key: provider.key, label: provider.label }));
 
-const buildSocialLoginAuthorizationUrl = ({ provider, config, state }) => {
+const buildSocialLoginAuthorizationUrl = ({ provider, config, state, context = {} }) => {
   const providerConfig = getProviderConfig({ provider, config });
   const normalizedState = String(state || '').trim();
   if (!/^[A-Za-z0-9_-]{20,128}$/.test(normalizedState)) {
     throw new SocialLoginError('invalid_state', '登录请求已失效，请重新扫码');
   }
-  const url = new URL(providerConfig.authorizeUrl);
+  const webview = providerConfig.key === 'wecom' && context.wecomFlow === 'webview';
+  const url = new URL(webview
+    ? 'https://open.weixin.qq.com/connect/oauth2/authorize'
+    : providerConfig.authorizeUrl);
   if (providerConfig.key === 'wecom') {
     url.searchParams.set('appid', providerConfig.corpId);
     url.searchParams.set('agentid', providerConfig.agentId);
+    if (webview) {
+      url.searchParams.set('response_type', 'code');
+      url.searchParams.set('scope', 'snsapi_base');
+      url.hash = 'wechat_redirect';
+    }
   } else {
     url.searchParams.set('app_id', providerConfig.appId);
   }
@@ -122,7 +130,25 @@ const normalizeStateContext = (context = {}) => {
     ? String(context.system).trim().toLowerCase()
     : '';
   const mode = String(context.mode || '').trim().toLowerCase() === 'switch' ? 'switch' : '';
-  return { system, mode };
+  return {
+    system,
+    mode,
+    ...(context.entry === 'workbench' ? { entry: 'workbench' } : {}),
+    ...(context.wecomFlow === 'webview' ? { wecomFlow: 'webview' } : {}),
+  };
+};
+
+const createSocialLoginRequestContext = ({ provider, query = {}, userAgent = '', examOidcEnabled = false }) => {
+  const context = normalizeStateContext({ system: query.system, mode: query.mode });
+  if (query.entry === 'workbench') {
+    if (provider !== 'wecom' || context.system !== 'train-exam' || !examOidcEnabled) {
+      throw new SocialLoginError('provider_disabled', '考试系统 OIDC 接入尚未配置');
+    }
+    context.entry = 'workbench';
+  }
+  // UA selects the protocol, not the identity; callback trusts only the signed state.
+  if (provider === 'wecom' && /\bwxwork\b/i.test(String(userAgent))) context.wecomFlow = 'webview';
+  return context;
 };
 
 const createSocialLoginState = ({
@@ -176,7 +202,7 @@ const fetchJson = async ({ fetchImpl, url, options = {}, timeoutMs }) => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await fetchImpl(url, { ...options, signal: controller.signal });
+    const response = await fetchImpl(url, { ...options, redirect: 'error', signal: controller.signal });
     if (!response?.ok) throw new Error('upstream status');
     return await response.json();
   } catch (_err) {
@@ -200,7 +226,7 @@ const assertFeishuSuccess = (payload) => {
   return payload;
 };
 
-const exchangeWecomCode = async ({ providerConfig, code, fetchImpl, timeoutMs }) => {
+const exchangeWecomCode = async ({ providerConfig, code, fetchImpl, timeoutMs, context }) => {
   const tokenUrl = new URL('https://qyapi.weixin.qq.com/cgi-bin/gettoken');
   tokenUrl.searchParams.set('corpid', providerConfig.corpId);
   tokenUrl.searchParams.set('corpsecret', providerConfig.secret);
@@ -212,7 +238,9 @@ const exchangeWecomCode = async ({ providerConfig, code, fetchImpl, timeoutMs })
   const accessToken = String(tokenPayload.access_token || '').trim();
   if (!accessToken) throw new SocialLoginError('provider_unavailable');
 
-  const identityUrl = new URL('https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo');
+  const identityUrl = new URL(context.wecomFlow === 'webview'
+    ? 'https://qyapi.weixin.qq.com/cgi-bin/user/getuserinfo'
+    : 'https://qyapi.weixin.qq.com/cgi-bin/auth/getuserinfo');
   identityUrl.searchParams.set('access_token', accessToken);
   identityUrl.searchParams.set('code', code);
   const identityPayload = assertWecomSuccess(await fetchJson({
@@ -272,6 +300,7 @@ const exchangeSocialAuthorizationCode = async ({
   provider,
   config,
   code,
+  context = {},
   fetchImpl = global.fetch,
 } = {}) => {
   const providerConfig = getProviderConfig({ provider, config });
@@ -286,6 +315,7 @@ const exchangeSocialAuthorizationCode = async ({
       code: normalizedCode,
       fetchImpl,
       timeoutMs: config.requestTimeoutMs,
+      context,
     });
   }
   return exchangeFeishuCode({
@@ -300,6 +330,7 @@ module.exports = {
   SocialLoginError,
   buildSocialLoginAuthorizationUrl,
   createSocialLoginState,
+  createSocialLoginRequestContext,
   exchangeSocialAuthorizationCode,
   getEnabledSocialLoginProviders,
   readSocialLoginConfig,

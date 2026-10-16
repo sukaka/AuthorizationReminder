@@ -5,6 +5,7 @@ const {
   SocialLoginError,
   buildSocialLoginAuthorizationUrl,
   createSocialLoginState,
+  createSocialLoginRequestContext,
   exchangeSocialAuthorizationCode,
   getEnabledSocialLoginProviders,
   readSocialLoginConfig,
@@ -12,6 +13,63 @@ const {
 } = require('../social-login');
 
 const SIGNING_SECRET = 'test-social-login-signing-secret-with-more-than-32-characters';
+
+const wecomConfig = () => readSocialLoginConfig({
+  AUTH_PUBLIC_URL: 'https://login.example.com',
+  AUTH_WECOM_CORP_ID: 'ww-corp',
+  AUTH_WECOM_AGENT_ID: '1000002',
+  AUTH_WECOM_SECRET: 'test-only-secret',
+});
+
+test('workbench entry requires the exam OIDC client and chooses in-app authorization only for WeCom', () => {
+  const options = { provider: 'wecom', query: { system: 'train-exam', entry: 'workbench' }, examOidcEnabled: true };
+  assert.deepEqual(createSocialLoginRequestContext({ ...options, userAgent: 'MicroMessenger wxwork/4.1' }), {
+    system: 'train-exam', mode: '', entry: 'workbench', wecomFlow: 'webview',
+  });
+  assert.equal(createSocialLoginRequestContext({ ...options, userAgent: 'Chrome' }).wecomFlow, undefined);
+  for (const override of [{ examOidcEnabled: false }, { provider: 'feishu' }, { query: { system: 'ai-assistant', entry: 'workbench' } }]) {
+    assert.throws(() => createSocialLoginRequestContext({ ...options, ...override }),
+      (error) => error instanceof SocialLoginError && error.code === 'provider_disabled');
+  }
+});
+
+test('WeCom webview authorization uses silent member scope and signed flow context', () => {
+  const context = createSocialLoginRequestContext({ provider: 'wecom', query: { system: 'train-exam' }, userAgent: 'wxwork/4.1' });
+  const issued = createSocialLoginState({ provider: 'wecom', signingSecret: SIGNING_SECRET, context });
+  const verified = verifySocialLoginState({ provider: 'wecom', signingSecret: SIGNING_SECRET, ...issued });
+  assert.equal(verified.wecomFlow, 'webview');
+  const url = new URL(buildSocialLoginAuthorizationUrl({ provider: 'wecom', config: wecomConfig(), state: issued.state, context: verified }));
+  assert.equal(url.origin, 'https://open.weixin.qq.com');
+  assert.equal(url.pathname, '/connect/oauth2/authorize');
+  assert.equal(url.searchParams.get('scope'), 'snsapi_base');
+  assert.equal(url.searchParams.get('response_type'), 'code');
+  assert.equal(url.searchParams.get('agentid'), '1000002');
+  assert.equal(url.searchParams.get('redirect_uri'), wecomConfig().providers.wecom.callbackUrl);
+  assert.equal(url.hash, '#wechat_redirect');
+  assert.equal(url.searchParams.has('corpsecret'), false);
+});
+
+test('untrusted query parameters cannot select the code exchange protocol', () => {
+  const context = createSocialLoginRequestContext({ provider: 'wecom', query: { system: 'train-exam', wecomFlow: 'webview' }, userAgent: 'Chrome' });
+  assert.equal(context.wecomFlow, undefined);
+});
+
+test('webview exchange uses the webpage identity endpoint and rejects nonmembers', async () => {
+  for (const member of [true, false]) {
+    const requests = [];
+    const result = exchangeSocialAuthorizationCode({
+      provider: 'wecom', config: wecomConfig(), code: 'test-code', context: { wecomFlow: 'webview' },
+      fetchImpl: async (url, options) => {
+        requests.push(new URL(url));
+        assert.equal(options.redirect, 'error');
+        return jsonResponse(requests.length === 1 ? { access_token: 'test-token' } : member ? { UserId: 'member' } : { OpenId: 'external' });
+      },
+    });
+    if (member) assert.deepEqual(await result, { provider: 'wecom', subject: 'member' });
+    else await assert.rejects(result, (error) => error.code === 'identity_unavailable');
+    assert.equal(requests[1].pathname, '/cgi-bin/user/getuserinfo');
+  }
+});
 
 const jsonResponse = (payload, { ok = true, status = 200 } = {}) => ({
   ok,
